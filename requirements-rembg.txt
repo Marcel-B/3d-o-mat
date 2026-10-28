@@ -1,0 +1,3 @@
+# Besseres Freistellen von Fotos (BiRefNet/U2-Net über onnxruntime, läuft auf der CPU des mac-mini).
+# Ohne dieses Paket stellt 3d-o-mat nur einfarbige Hintergründe frei.
+rembg[cpu]>=2.0.60

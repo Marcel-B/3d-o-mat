@@ -1,0 +1,15 @@
+# Im LXC auf dem Proxmox: docker compose up -d --build (Einrichtung im README).
+services:
+  3d-o-mat:
+    build: .
+    container_name: 3d-o-mat
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./config.json:/config/config.json:ro
+      # Der Mountpoint im LXC, an dem die Freigabe der T7 von oi-o-mat ankommt (mp0, siehe README).
+      - /mnt/3d-o-mat:/data
+      - rembg-cache:/cache
+volumes:
+  rembg-cache:
