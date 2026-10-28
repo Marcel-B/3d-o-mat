@@ -1,0 +1,21 @@
+{
+  "listen": "0.0.0.0",
+  "port": 8090,
+  "dataDir": "/data",
+  "gate": {
+    "url": "http://192.168.2.122:1235",
+    "app": "3d-o-mat",
+    "note": "Bild zu 3D (TRELLIS.2 in MLX-Serve) und Bildprüfung/Prompts (Gemma); Website im Proxmox-LXC (Docker)",
+    "priority": 30,
+    "holdFor": "songs images video ace",
+    "models": [
+      { "model": "TRELLIS.2-4B-MLX-Serve-8bit", "backend": "mlx-serve", "ramGb": 18, "sizeGb": 9.6, "idleUnloadMinutes": 2 },
+      { "model": "gemma-4-26b-a4b-it-qat-mlx", "source": "lmstudio-community/gemma-4-26b-a4b-it-qat-mlx", "context": 8192, "ramGb": 15, "sizeGb": 15.6 }
+    ]
+  },
+  "trellisModel": "TRELLIS.2-4B-MLX-Serve-8bit",
+  "assistModel": "gemma-4-26b-a4b-it-qat-mlx",
+  "defaults": { "texture_size": 2048, "decimation_target": 300000 },
+  "cutout": "auto",
+  "rembgModel": "birefnet-general"
+}
