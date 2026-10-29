@@ -105,6 +105,18 @@ export const api = {
   jobs: () => call<Job[]>('GET', '/api/jobs'),
   createJob: (imageId: string, options: Options) => call<Job>('POST', '/api/jobs', { imageId, options }),
   rigJob: (id: string, kind: string) => call<Job>('POST', `/api/jobs/${id}/rig`, { class: kind }),
+  // Die Proben als Animationen im GLB; zurück kommt die Datei.
+  animatedGlb: async (id: string, clips: unknown[]) => {
+    const response = await fetch(`/api/jobs/${id}/animated.glb`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ clips }),
+    });
+    if (!response.ok) {
+      const json = await response.json().catch(() => ({}));
+      throw new Error(typeof json.detail === 'string' ? json.detail : `HTTP ${response.status}`);
+    }
+    const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? `${id}-proben.glb`;
+    return { blob: await response.blob(), name };
+  },
   cancelJob: (id: string) => call<Job>('POST', `/api/jobs/${id}/cancel`),
   deleteJob: (id: string) => call('DELETE', `/api/jobs/${id}`),
 };

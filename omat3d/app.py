@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import assist, cutout
+from .animate import AnimationError, add_animations
 from .config import Config
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
 from .jobs import OPEN, Jobs
@@ -51,6 +52,11 @@ class PaintRequest(BaseModel):
     n: int = Field(1, ge=1, le=4)
     seed: int | None = Field(None, ge=0, le=2**31 - 1)
     size: str = "1024x1024"
+
+
+class AnimatedRequest(BaseModel):
+    """Die Proben als Keyframes, wie stage.ts bake() sie ausrechnet."""
+    clips: list[dict] = Field(..., min_length=1, max_length=12)
 
 
 class PromptRequest(BaseModel):
@@ -291,6 +297,21 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
         suffix = "-skelett" if doc.get("kind") == "rig" else ""
         return file("jobs", job_id, "model.glb", "model/gltf-binary", f"{name}{suffix}-{job_id}.glb" if download else None)
+
+    @app.post("/api/jobs/{job_id}/animated.glb")
+    def animated(job_id: str, request: AnimatedRequest):
+        doc = job(job_id)
+        if doc.get("kind") != "rig" or doc["state"] != "done":
+            raise HTTPException(409, "Nur ein fertiges Modell mit Skelett bekommt Proben")
+        try:
+            data = add_animations(store.get("jobs", job_id, "model.glb"), request.clips)
+        except FileNotFoundError:
+            raise HTTPException(404, "Datei fehlt auf der T7") from None
+        except AnimationError as error:
+            raise HTTPException(422, str(error)) from error
+        name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
+        return Response(data, media_type="model/gltf-binary",
+                        headers={"content-disposition": f'attachment; filename="{name}-proben-{job_id}.glb"'})
 
     if FRONTEND.is_dir():
         app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")

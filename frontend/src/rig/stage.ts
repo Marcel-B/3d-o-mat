@@ -7,6 +7,8 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 export type Clip = 'walk' | 'punch' | 'kick' | 'arms' | 'squat' | 'fall';
+export type Track = { node: number; path: 'rotation' | 'translation'; values: number[] };
+export type Baked = { name: string; times: number[]; tracks: Track[] };
 export type Facts = { bones: number; meshes: number; vertices: number; core: { name: string; found: boolean }[] };
 
 // Mixamo-Namen, wie skintokens sie mit --class humanoid vergibt (mit oder ohne "mixamorig:").
@@ -15,6 +17,11 @@ const CORE = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftShoulder
 
 // 0 bis 1 weich, außerhalb festgehalten.
 const ease = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+
+// Eine Runde jeder Probe in Sekunden, für den Export als Schleife.
+export const PERIODS: Record<Clip, number> = {
+  walk: (2 * Math.PI) / 5, punch: (2 * Math.PI) / 4, kick: 1.8, arms: Math.PI, squat: (2 * Math.PI) / 2.4, fall: 4.5,
+};
 
 export class RigStage {
   private renderer: THREE.WebGLRenderer;
@@ -29,6 +36,8 @@ export class RigStage {
   private rootPosition = new THREE.Vector3();
   private rootQuaternion = new THREE.Quaternion();
   private heel = 0;
+  // Welcher Knoten des GLB zu welchem Knochen gehört, für den Export der Proben.
+  private nodes = new Map<THREE.Bone, number>();
   private armAngle: Record<string, number> = { LeftArm: Math.PI / 2, RightArm: -Math.PI / 2 };
   private clip: Clip | null = null;
   private started = 0;
@@ -93,6 +102,11 @@ export class RigStage {
       if ((object as THREE.SkinnedMesh).isSkinnedMesh) this.meshes.push(object as THREE.SkinnedMesh);
     });
     this.bones.forEach(bone => this.rest.set(bone, bone.quaternion.clone()));
+    this.nodes.clear();
+    this.bones.forEach(bone => {
+      const node = gltf.parser.associations.get(bone)?.nodes;
+      if (node !== undefined) this.nodes.set(bone, node);
+    });
     this.measureArms();
     this.helper = new THREE.SkeletonHelper(this.root);
     (this.helper.material as THREE.LineBasicMaterial).depthTest = false;
@@ -206,6 +220,48 @@ export class RigStage {
     const pivot = new THREE.Vector3(0, 0, this.heel);
     this.root.quaternion.copy(turn).multiply(this.rootQuaternion);
     this.root.position.copy(this.rootPosition).sub(pivot).applyQuaternion(turn).add(pivot);
+  }
+
+  // Die Proben als Keyframes (30 je Sekunde, eine Runde) in den Koordinaten des GLB, ohne das Einpassen auf der
+  // Bühne: Drehungen der Knochen, dazu für die obersten Knochen die Lage, weil Umfallen die ganze Figur bewegt.
+  bake(clips: [Clip, string][], fps = 30): Baked[] {
+    const playing = this.clip;
+    this.clip = null;
+    const top = this.bones.filter(bone => !(bone.parent as THREE.Bone | null)?.isBone && this.nodes.has(bone));
+    const baked = clips.map(([clip, name]) => {
+      const frames = Math.max(2, Math.round(PERIODS[clip] * fps));
+      const times = Array.from({ length: frames + 1 }, (_, i) => (i * PERIODS[clip]) / frames);
+      const rotations = new Map<THREE.Bone, number[]>();
+      const positions = new Map<THREE.Bone, number[]>();
+      for (const t of times) {
+        this.resetPose();
+        this.play(clip, t);
+        this.root!.updateMatrixWorld(true);
+        const world = new Map(top.map(bone => [bone, bone.matrixWorld.clone()]));
+        // Die Bühne zurück in ihre Lage, damit die Kippung beim Umfallen in den obersten Knochen landet.
+        this.root!.position.copy(this.rootPosition);
+        this.root!.quaternion.copy(this.rootQuaternion);
+        this.root!.updateMatrixWorld(true);
+        for (const bone of this.nodes.keys()) {
+          let q = bone.quaternion;
+          if (world.has(bone)) {
+            const local = bone.parent!.matrixWorld.clone().invert().multiply(world.get(bone)!);
+            const p = new THREE.Vector3(); q = new THREE.Quaternion();
+            local.decompose(p, q, new THREE.Vector3());
+            positions.set(bone, [...(positions.get(bone) ?? []), p.x, p.y, p.z]);
+          }
+          rotations.set(bone, [...(rotations.get(bone) ?? []), q.x, q.y, q.z, q.w]);
+        }
+      }
+      const tracks: Track[] = [];
+      const moves = (values: number[], size: number) => values.some((v, i) => Math.abs(v - values[i % size]) > 1e-5);
+      for (const [bone, values] of rotations) if (moves(values, 4)) tracks.push({ node: this.nodes.get(bone)!, path: 'rotation', values });
+      for (const [bone, values] of positions) if (moves(values, 3)) tracks.push({ node: this.nodes.get(bone)!, path: 'translation', values });
+      return { name, times, tracks };
+    });
+    this.resetPose();
+    this.clip = playing;
+    return baked;
   }
 
   setClip(clip: Clip | null) {

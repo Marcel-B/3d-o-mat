@@ -38,6 +38,7 @@ Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schran
 5. **Skelett einsetzen (optional):** Unter einem fertigen Modell setzt „Skelett einsetzen“ Knochen und Gewichte ein. Dafür läuft SkinTokens auf oi-o-mat, etwa 35 Sekunden und höchstens 8 GB. Das Ergebnis ist ein eigener Auftrag.
    - Bei „Mensch“ tragen die Knochen Mixamo-Namen. Animationen von Mixamo (Without Skin) passen dann direkt, etwa in Godot oder Unity.
    - Der Viewer zeigt die Figur mit Proben (Gehen, Schlag, Tritt, Arme heben, Kniebeuge, Umfallen), Schiebern für einzelne Knochen und dem Befund, welche Mixamo-Knochen gefunden wurden.
+   - „GLB mit Proben herunterladen“ hängt die sechs Proben als glTF-Animationen an das GLB (30 Bilder je Sekunde, eine Runde je Probe, mit der eingestellten Stärke). In Godot erscheinen sie im `AnimationPlayer` als „Gehen“, „Tritt“, „Umfallen“ usw., in Blender als Aktionen. Netz, Texturen und Skelett bleiben unverändert; nur bewegte Knoten, die als Matrix gespeichert sind, werden in Lage, Drehung und Größe zerlegt, weil glTF das für Animationen verlangt. Die Proben sind Prüfbewegungen; für ein Spiel passen Mixamo-Animationen über Godots Retargeting besser.
 
 Ist die T7 nicht da (keine Datei `.3d-o-mat` im Ordner) oder oi-o-mat nicht erreichbar, nimmt die Website nichts an und zeigt „T7 nicht erreichbar“. So landet nie etwas auf der internen Platte von oi-o-mat.
 

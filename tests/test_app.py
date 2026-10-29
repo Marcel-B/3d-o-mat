@@ -256,6 +256,11 @@ def test_rig_a_finished_model(tmp_path):
         download = client.get(f"/api/jobs/{rig['id']}/model.glb?download=true")
         assert download.content == GLB + b"rig" and "-skelett-" in download.headers["content-disposition"]
         assert client.post(f"/api/jobs/{rig['id']}/rig", json={}).status_code == 409
+        clips = {"clips": [{"name": "Tritt", "times": [0, 1], "tracks": []}]}
+        assert client.post(f"/api/jobs/{model['id']}/animated.glb", json=clips).status_code == 409
+        # Das nachgestellte GLB ist keins; ein echtes prüft tests/test_animate.py.
+        refused = client.post(f"/api/jobs/{rig['id']}/animated.glb", json=clips)
+        assert refused.status_code == 422 and "GLB" in refused.json()["detail"]
 
 
 def test_rig_failure_is_reported(tmp_path):

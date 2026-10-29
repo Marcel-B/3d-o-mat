@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { api } from '../api';
 import { RigStage, type Clip, type Facts } from './stage';
 
 const clips: [Clip, string][] = [
@@ -6,7 +7,7 @@ const clips: [Clip, string][] = [
 ];
 
 // Ein GLB mit Skelett ansehen und bewegen: Proben, Knochen von Hand, Skelett und Drahtgitter.
-export function RigViewer({ url }: { url: string }) {
+export function RigViewer({ url, jobId }: { url: string; jobId: string }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const stage = useRef<RigStage | null>(null);
   const [facts, setFacts] = useState<Facts | null>(null);
@@ -17,6 +18,8 @@ export function RigViewer({ url }: { url: string }) {
   const [angles, setAngles] = useState<[number, number, number]>([0, 0, 0]);
   const [skeleton, setSkeleton] = useState(true);
   const [wire, setWire] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!canvas.current) return;
@@ -54,6 +57,24 @@ export function RigViewer({ url }: { url: string }) {
   function reset() {
     setClip(null); setAngles([0, 0, 0]);
     stage.current?.setClip(null);
+  }
+
+  // Alle Proben mit der eingestellten Stärke als Animationen ins GLB, für Godot (AnimationPlayer) oder Blender.
+  async function download() {
+    if (!stage.current) return;
+    setExporting(true); setExportError(null);
+    try {
+      const { blob, name } = await api.animatedGlb(jobId, stage.current.bake(clips));
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = name;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+    } catch (e) {
+      setExportError(`Export ging nicht: ${(e as Error).message}`);
+    } finally {
+      setExporting(false);
+    }
   }
 
   const missing = facts?.core.filter(c => !c.found) ?? [];
@@ -96,6 +117,11 @@ export function RigViewer({ url }: { url: string }) {
               {facts.bones} Knochen · {facts.vertices.toLocaleString('de-DE')} Punkte · Mixamo-Kern {facts.core.length - missing.length}/{facts.core.length}
             </span>
           </div>
+          <div className="row tight">
+            <button type="button" onClick={download} disabled={exporting}>{exporting ? 'Packt …' : 'GLB mit Proben herunterladen'}</button>
+            <span className="small muted">Die sechs Proben als Animationen (30 Bilder je Sekunde, Stärke wie eingestellt), in Godot im AnimationPlayer.</span>
+          </div>
+          {exportError && <div className="error">{exportError}</div>}
           {missing.length > 0 && <div className="small warn">Ohne Mixamo-Namen: {missing.map(m => m.name).join(', ')}. Proben bewegen diese Teile nicht.</div>}
         </div>
       )}
