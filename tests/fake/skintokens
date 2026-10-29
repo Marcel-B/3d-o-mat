@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stands in for skintokens: `rig IN OUT --report R --class C --seed N`. Appends "+armature" to the GLB; a GLB that
-contains b"fail" ends like a mesh without a humanoid core (exit 1, ok false)."""
+contains b"fail" ends like a mesh without a humanoid core (exit 1, ok false); one with b"flaky" does so below seed 3,
+as TokenRig's skeleton changes with the seed."""
 import json
 import sys
 
@@ -9,7 +10,7 @@ _, source, target = args[:3]
 report = args[args.index("--report") + 1]
 seed = int(args[args.index("--seed") + 1])
 data = open(source, "rb").read()
-if b"fail" in data:
+if b"fail" in data or (b"flaky" in data and seed < 3):
     json.dump({"ok": False, "tool": "skintokens", "stage": "rig", "reason": "kein Mensch erkannt (humanoid core fehlt)"}, open(report, "w"))
     sys.exit(1)
 open(target, "wb").write(data + b"+armature")

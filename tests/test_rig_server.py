@@ -61,4 +61,12 @@ def test_failures(server):
     assert call(server, "/v1/rig", {"glb": base64.b64encode(b"nope").decode()})[0] == 400
     assert call(server, "/v1/rig", {"glb": base64.b64encode(b"glTFxx").decode(), "class": "giraffe"})[0] == 400
     status, answer = call(server, "/v1/rig", {"glb": base64.b64encode(b"glTFfail").decode()})
-    assert status == 422 and "kein Mensch" in answer["error"]["message"]
+    assert status == 422 and "kein Mensch" in answer["error"]["message"] and "Seeds 1 bis 3" in answer["error"]["message"]
+    status, answer = call(server, "/v1/rig", {"glb": base64.b64encode(b"glTFfail").decode(), "class": "custom"})
+    assert status == 422 and "Seeds" not in answer["error"]["message"]
+
+
+def test_next_seeds_are_tried_for_a_humanoid(server):
+    glb = b"glTF\x02\x00\x00\x00flaky"
+    status, answer = call(server, "/v1/rig", {"glb": base64.b64encode(glb).decode(), "class": "humanoid", "seed": 1})
+    assert status == 200 and answer["report"]["seed"] == 3 and answer["report"]["tries"] == 3

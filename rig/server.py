@@ -10,7 +10,8 @@ needs it (backend type "tool") and checks that oi-o-mat has the memory for it; 3
     GET  /health
 
 Settings in rig.json next to this folder (install-rig.sh writes it): {"binary": ".../bin/skintokens",
-"home": "/Volumes/T7/skintokens", "port": 11240, "memoryGb": 8}. Plain Python 3.9, macOS's own /usr/bin/python3:
+"home": "/Volumes/T7/skintokens", "port": 11240, "memoryGb": 8}, optional "humanoidTries" (3): how many seeds a humanoid
+gets when skintokens cannot name its skeleton. Plain Python 3.9, macOS's own /usr/bin/python3:
 keep `from __future__ import annotations` and no newer syntax.
 """
 
@@ -48,6 +49,9 @@ def settings() -> dict:
         # Measured on oi-o-mat (M6, 32 GB) with a 226k-vertex TRELLIS.2 figure: 8.3 GB peak footprint, 34.5 s.
         "memoryGb": float(values.get("memoryGb") or 8),
         "timeoutSeconds": int(values.get("timeoutSeconds") or 900),
+        # TokenRig's skeleton changes with the seed; one that skintokens cannot name as a humanoid (no chest with arms
+        # on both sides, say) often works with the next seed. So many seeds are tried, one after the other.
+        "humanoidTries": max(1, int(values.get("humanoidTries") or 3)),
     }
 
 
@@ -86,7 +90,22 @@ def rig(body: dict) -> tuple[int, dict]:
     if not isinstance(seed, int) or seed < 0:
         return 400, {"error": {"message": "seed: ganze Zahl ab 0"}}
     s = settings()
-    with LOCK, tempfile.TemporaryDirectory(prefix="rig-") as work:
+    tries = s["humanoidTries"] if kind == "humanoid" else 1
+    with LOCK:
+        for attempt in range(tries):
+            status, answer = run_once(s, glb, kind, seed + attempt)
+            # 1 (422): ran and failed; another seed may give a skeleton it can name. Anything else is final.
+            if status != 422:
+                break
+        if status == 422 and tries > 1:
+            answer["error"]["message"] += f" (Seeds {seed} bis {seed + tries - 1} versucht)"
+        if status == 200:
+            answer["report"] = {**answer["report"], "seed": seed + attempt, "tries": attempt + 1}
+    return status, answer
+
+
+def run_once(s: dict, glb: bytes, kind: str, seed: int) -> tuple[int, dict]:
+    with tempfile.TemporaryDirectory(prefix="rig-") as work:
         source, target, report = (os.path.join(work, name) for name in ("in.glb", "out.glb", "report.json"))
         with open(source, "wb") as file:
             file.write(glb)
