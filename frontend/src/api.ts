@@ -37,8 +37,7 @@ export type Job = {
 };
 
 export type Status = {
-  dataDir: string;
-  mounted: boolean;
+  storage: { where: string; mounted: boolean; root: string | null; freeGb: number | null; error: string | null };
   rembg: boolean;
   cutout: string;
   models: { trellis: string; assist: string };

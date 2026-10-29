@@ -1,11 +1,12 @@
-"""Die Website: eine JSON-Schnittstelle unter /api und die React-Oberfläche (frontend/dist) unter /."""
+"""Die Website: eine JSON-Schnittstelle unter /api und die React-Oberfläche (frontend/dist) unter /. Dateien gehen über
+store.py auf die T7 von oi-o-mat; hier bleibt nur, was gerade im Speicher ist."""
 import re
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -13,10 +14,11 @@ from . import assist, cutout
 from .config import Config
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
 from .jobs import OPEN, Jobs
-from .store import NotMounted, Store, read_json, write_json
+from .store import NotMounted, Store, StoreError, new_id
 
 MAX_UPLOAD = 40 * 1024 * 1024
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}
 
 
 class Options(BaseModel):
@@ -39,8 +41,15 @@ class PromptRequest(BaseModel):
     idea: str = Field(..., min_length=1, max_length=1000)
 
 
-def create_app(config: Config, gate: Gate | None = None, register: bool = True, log=print) -> FastAPI:
-    store = Store(config.data_path, config.mount_command, log)
+def make_store(config: Config, log=print) -> Store:
+    spec = config.store
+    return Store(ssh=spec.get("ssh"), key=spec.get("key"), folder=spec.get("folder"),
+                 known_hosts=spec.get("knownHosts"), log=log)
+
+
+def create_app(config: Config, gate: Gate | None = None, store: Store | None = None, register: bool = True,
+               log=print) -> FastAPI:
+    store = store or make_store(config, log)
     gate = gate or Gate(config.gate_url, config.app_name, config.request_timeout_minutes)
     jobs = Jobs(store, gate, config.trellis_model, config.defaults, log)
 
@@ -49,11 +58,6 @@ def create_app(config: Config, gate: Gate | None = None, register: bool = True, 
         if register and config.gate:
             threading.Thread(target=register_with_gate, args=({**config.gate, "url": config.gate_url, "app": config.app_name}, log),
                              kwargs={"stop": jobs.stop}, daemon=True).start()
-        try:
-            store.ensure_mounted()
-            jobs.recover()
-        except NotMounted as error:
-            log(str(error))
         jobs.start()
         yield
         jobs.stop.set()
@@ -67,6 +71,10 @@ def create_app(config: Config, gate: Gate | None = None, register: bool = True, 
     async def not_mounted(_request: Request, error: NotMounted):
         return JSONResponse({"error": str(error)}, status_code=503)
 
+    @app.exception_handler(StoreError)
+    async def store_error(_request: Request, error: StoreError):
+        return JSONResponse({"error": f"Ablage auf oi-o-mat: {error}"}, status_code=502)
+
     @app.exception_handler(GateRefused)
     async def refused(_request: Request, error: GateRefused):
         return JSONResponse({"error": f"{error} (in der Oberfläche der Schranke /gate freigeben)"}, status_code=409)
@@ -75,37 +83,42 @@ def create_app(config: Config, gate: Gate | None = None, register: bool = True, 
     async def busy(_request: Request, error: GateBusy):
         return JSONResponse({"error": f"oi-o-mat ist beschäftigt: {error}"}, status_code=503)
 
-    def image_dir(image_id: str) -> Path:
+    def image(image_id: str) -> dict:
         store.ensure_mounted()
         try:
-            path = store.dir("images", image_id)
+            return store.read("images", image_id)
         except KeyError:
             raise HTTPException(404, "Kein solches Bild") from None
-        if not (path / "image.json").is_file():
-            raise HTTPException(404, "Kein solches Bild")
-        return path
 
-    def job_dir(job_id: str) -> Path:
+    def job(job_id: str) -> dict:
         store.ensure_mounted()
         try:
-            path = store.dir("jobs", job_id)
+            return store.read("jobs", job_id)
         except KeyError:
             raise HTTPException(404, "Kein solcher Auftrag") from None
-        if not (path / "job.json").is_file():
-            raise HTTPException(404, "Kein solcher Auftrag")
-        return path
+
+    def file(kind: str, item: str, name: str, media_type: str, filename: str | None = None) -> Response:
+        try:
+            data = store.get(kind, item, name)
+        except FileNotFoundError:
+            raise HTTPException(404, "Datei fehlt auf der T7") from None
+        headers = {"cache-control": "private, max-age=86400"}
+        if filename:
+            headers["content-disposition"] = f'attachment; filename="{filename}"'
+        return Response(data, media_type=media_type, headers=headers)
 
     # --- Zustand
 
     @app.get("/api/status")
     def status():
+        storage = store.check()
         gate_status = gate.status()
         mine = (gate_status or {}).get("apps", {}).get(config.app_name)
         models = {m.get("model"): {"state": m.get("state"), "approved": m.get("approved"), "backend": m.get("backend")}
                   for m in (mine or {}).get("models", [])}
         return {
-            "dataDir": str(config.data_path),
-            "mounted": store.mounted,
+            "storage": {"where": store.name, "mounted": bool(storage.get("mounted")), "root": storage.get("root"),
+                        "freeGb": storage.get("freeGb"), "error": storage.get("error")},
             "rembg": cutout.rembg_available(),
             "cutout": config.cutout,
             "models": {"trellis": config.trellis_model, "assist": config.assist_model},
@@ -124,52 +137,50 @@ def create_app(config: Config, gate: Gate | None = None, register: bool = True, 
     # --- Bilder
 
     @app.post("/api/images")
-    async def upload(file: UploadFile = File(...)):
+    async def upload(file_: UploadFile = File(..., alias="file")):
         store.ensure_mounted()
-        data = await file.read(MAX_UPLOAD + 1)
+        data = await file_.read(MAX_UPLOAD + 1)
         if len(data) > MAX_UPLOAD:
             raise HTTPException(413, "Bild größer als 40 MB")
         try:
             png, info = cutout.cut(data, config.cutout, config.rembg_model)
         except Exception as error:  # noqa: BLE001 – Pillow wirft je nach Format anderes
             raise HTTPException(400, f"Kein lesbares Bild: {error}") from error
-        image_id, path = store.create("images")
-        suffix = re.sub(r"[^a-z0-9]", "", Path(file.filename or "").suffix.lower())[:5] or "bin"
-        (path / f"original.{suffix}").write_bytes(data)
-        (path / "cutout.png").write_bytes(png)
-        image = {"id": image_id, "name": Path(file.filename or "bild").stem[:80], "original": f"original.{suffix}",
-                 "cutout": info, "check": None, "created": image_id}
-        write_json(path / "image.json", image)
-        return image
+        image_id = new_id()
+        suffix = re.sub(r"[^a-z0-9]", "", Path(file_.filename or "").suffix.lower())[:5]
+        suffix = suffix if suffix in TYPES else "bin"
+        store.put("images", image_id, f"original.{suffix}", data)
+        store.put("images", image_id, "cutout.png", png)
+        doc = {"id": image_id, "name": Path(file_.filename or "bild").stem[:80], "original": f"original.{suffix}",
+               "cutout": info, "check": None, "created": image_id}
+        return store.write("images", doc)
 
     @app.get("/api/images")
     def images():
-        return store.list("images", "image.json")
+        return store.list("images")
 
     @app.get("/api/images/{image_id}/{kind}")
     def image_file(image_id: str, kind: str):
-        path = image_dir(image_id)
+        doc = image(image_id)
         if kind == "cutout":
-            return FileResponse(path / "cutout.png", media_type="image/png")
+            return file("images", image_id, "cutout.png", "image/png")
         if kind == "original":
-            return FileResponse(path / read_json(path / "image.json")["original"])
+            name = doc["original"]
+            return file("images", image_id, name, TYPES.get(name.rsplit(".", 1)[-1], "application/octet-stream"))
         raise HTTPException(404, "original oder cutout")
 
     @app.post("/api/images/{image_id}/check")
     def check(image_id: str):
-        path = image_dir(image_id)
-        result = assist.check_image(gate, config.assist_model, (path / "cutout.png").read_bytes())
-        image = read_json(path / "image.json")
-        image["check"] = result
-        write_json(path / "image.json", image)
-        return image
+        doc = image(image_id)
+        doc["check"] = assist.check_image(gate, config.assist_model, store.get("images", image_id, "cutout.png"))
+        return store.write("images", doc)
 
     @app.delete("/api/images/{image_id}")
     def delete_image(image_id: str):
-        path = image_dir(image_id)
-        if any(job["imageId"] == image_id and job["state"] in OPEN for job in jobs.all()):
+        image(image_id)
+        if any(j["imageId"] == image_id and j["state"] in OPEN for j in jobs.all()):
             raise HTTPException(409, "Für dieses Bild läuft noch ein Auftrag")
-        _remove(path)
+        store.delete("images", image_id)
         return {"deleted": image_id}
 
     # --- Prompts (Bilderzeugung folgt über img-o-mat)
@@ -185,13 +196,13 @@ def create_app(config: Config, gate: Gate | None = None, register: bool = True, 
 
     @app.post("/api/jobs")
     def create_job(request: JobRequest):
-        path = image_dir(request.imageId)
+        doc = image(request.imageId)
         options = request.options.model_dump(exclude_none=True)
         if options.get("texture_size") not in (None, 512, 1024, 2048, 4096):
             raise HTTPException(422, "texture_size: 512, 1024, 2048 oder 4096")
         if options.get("resolution") not in (None, 512, 1024, 1536):
             raise HTTPException(422, "resolution: 512, 1024 oder 1536")
-        return jobs.create(read_json(path / "image.json"), options)
+        return jobs.create(doc, options)
 
     @app.get("/api/jobs")
     def list_jobs():
@@ -199,12 +210,11 @@ def create_app(config: Config, gate: Gate | None = None, register: bool = True, 
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str):
-        job_dir(job_id)
-        return jobs.get(job_id)
+        return job(job_id)
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str):
-        job_dir(job_id)
+        job(job_id)
         try:
             return jobs.cancel(job_id)
         except ValueError as error:
@@ -212,30 +222,20 @@ def create_app(config: Config, gate: Gate | None = None, register: bool = True, 
 
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: str):
-        path = job_dir(job_id)
-        if jobs.get(job_id)["state"] in OPEN:
+        if job(job_id)["state"] in OPEN:
             raise HTTPException(409, "Erst abbrechen oder fertig werden lassen")
-        _remove(path)
+        store.delete("jobs", job_id)
         return {"deleted": job_id}
 
     @app.get("/api/jobs/{job_id}/model.glb")
     def model(job_id: str, download: bool = False):
-        path = job_dir(job_id)
-        glb = path / "model.glb"
-        if not glb.is_file():
+        doc = job(job_id)
+        if doc["state"] != "done":
             raise HTTPException(404, "Noch kein Modell")
-        job = jobs.get(job_id)
-        name = re.sub(r"[^A-Za-z0-9._-]+", "-", job.get("imageName") or "modell").strip("-") or "modell"
-        return FileResponse(glb, media_type="model/gltf-binary", filename=f"{name}-{job_id}.glb" if download else None,
-                            content_disposition_type="attachment" if download else "inline")
+        name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
+        return file("jobs", job_id, "model.glb", "model/gltf-binary", f"{name}-{job_id}.glb" if download else None)
 
     if FRONTEND.is_dir():
         app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")
 
     return app
-
-
-def _remove(path: Path) -> None:
-    for child in sorted(path.rglob("*"), reverse=True):
-        child.rmdir() if child.is_dir() else child.unlink()
-    path.rmdir()

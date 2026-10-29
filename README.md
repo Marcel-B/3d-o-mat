@@ -4,9 +4,17 @@ Aus einem Bild ein 3D-Modell: Bild hochladen, freistellen lassen, optional von G
 
 | Teil | Wo | Was |
 | --- | --- | --- |
-| Website und API | Proxmox-LXC mit Docker (oder ein Mac, siehe unten) | Python (FastAPI) mit React-Oberfläche, Port 8090; Freistellen mit rembg auf der CPU |
+| Website und API | Proxmox-LXC mit Docker | Python (FastAPI) mit React-Oberfläche, Port 8090; Freistellen mit rembg auf der CPU; hält keine Daten |
 | Rechnen | oi-o-mat, nur über die [LLM-Schranke](https://github.com/Marcel-B/scripts/blob/main/docs/llm-gate.md) | TRELLIS.2 in MLX-Serve (Bild zu 3D), Gemma 4 26B in LM Studio (Prüfen, Prompts) |
-| Daten | T7 an oi-o-mat, Ordner `3d-o-mat`, per SMB eingebunden | Bilder, Freistellungen, Aufträge, GLB-Dateien |
+| Dateien | T7 an oi-o-mat, `/Volumes/T7/3d-o-mat`, per SSH | Original, Freistellung, Aufträge, GLB |
+
+```
+Browser ──► 3d-o-mat (Proxmox, :8090) ──ssh──► oi-o-mat: store/launch.py ──► /Volumes/T7/3d-o-mat
+                     │
+                     └──► LLM-Schranke (oi-o-mat:1235) ──► MLX-Serve (TRELLIS.2), LM Studio (Gemma)
+```
+
+Die Website erreicht die T7 wie img-o-mat seinen Maler: per SSH, mit einem eigenen Schlüssel, der auf oi-o-mat nur `store/launch.py` starten darf. Das Skript kennt fünf Wörter (`check`, `put`, `get`, `list`, `delete`) und nur Pfade der Form `images|jobs/<id>/<name>`. Dafür läuft auf oi-o-mat kein Dienst und ist kein Port offen. Die Liste der Bilder und Aufträge hält die Website im Speicher und liest sie beim Start von der T7.
 
 Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schranke als `3d-o-mat` an. Die Schranke lässt Tonwerk vor, reiht nach Priorität ein, startet MLX-Serve bei Bedarf und entlädt TRELLIS.2 nach 2 Minuten Leerlauf wieder. Lizenz: MIT.
 
@@ -25,21 +33,43 @@ Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schran
    - 403 und 424 bedeuten, dass das Modell in `/gate` noch freigegeben werden muss.
 4. **Ergebnis:** Das GLB mit PBR-Texturen liegt auf der T7. Die Seite zeigt es mit `<model-viewer>`, und es lässt sich herunterladen.
 
-Ohne verbundene T7, also ohne die Datei `.3d-o-mat` im Datenordner, nimmt die App nichts an und zeigt „T7 nicht verbunden“. So schreibt sie nie aus Versehen auf die Platte des Containers.
+Ist die T7 nicht da (keine Datei `.3d-o-mat` im Ordner) oder oi-o-mat nicht erreichbar, nimmt die Website nichts an und zeigt „T7 nicht erreichbar“. So landet nie etwas auf der internen Platte von oi-o-mat.
 
 ## Einrichten
 
-### 1. oi-o-mat: Ordner und Freigabe
+### 1. Proxmox: Container und Website
+
+Das Skript `deploy/proxmox/3d-o-mat-lxc.sh` läuft in der Shell des Proxmox-Hosts als root, Schritt für Schritt:
 
 ```sh
-mkdir -p /Volumes/T7/3d-o-mat && touch /Volumes/T7/3d-o-mat/.3d-o-mat
+curl -fsSLo /root/3d-o-mat-lxc.sh https://raw.githubusercontent.com/Marcel-B/3d-o-mat/main/deploy/proxmox/3d-o-mat-lxc.sh
+bash /root/3d-o-mat-lxc.sh anlegen       # 1. unprivilegierter Debian-Container mit Docker
+bash /root/3d-o-mat-lxc.sh app <CTID>    # 2. Repo holen, config.json und SSH-Schlüssel anlegen, bauen, starten
 ```
 
-Dann in den Systemeinstellungen unter **Allgemein → Teilen → Dateifreigabe** den Ordner `/Volumes/T7/3d-o-mat` hinzufügen. Lesen und Schreiben bekommt nur `marcel`, Gäste haben keinen Zugriff. Bei den Optionen muss SMB an sein.
+Am Ende von `app` steht der Befehl für oi-o-mat mit dem öffentlichen Schlüssel der Website. Später gibt es diese Befehle:
+- `update <CTID>` holt den neuen Stand und baut neu.
+- `pruefen <CTID>` zeigt den Zustand von Ablage, Schranke und Freigaben.
+- `schluessel <CTID>` zeigt den Schlüssel noch einmal.
 
-### 2. oi-o-mat: Schranke und MLX-Serve
+`--help` nennt die Variablen, zum Beispiel `IP=192.168.2.50/24 GATEWAY=192.168.2.1` für eine feste Adresse.
 
-Die Schranke braucht den Stand mit mehreren Servern (scripts PR #19). MLX-Serve wird einmal eingetragen:
+Im Container liegt die App unter `/opt/3d-o-mat`, ihre Einstellung in `config.json` (aus `config.docker.json`). Der Schlüssel liegt in `ssh/`. Nutzerdaten gibt es dort keine.
+
+### 2. oi-o-mat: Ablage auf der T7
+
+„Entfernte Anmeldung“ muss an sein (Systemeinstellungen → Allgemein → Teilen). Dann im Checkout von 3d-o-mat:
+
+```sh
+git clone https://github.com/Marcel-B/3d-o-mat.git ~/repos/3d-o-mat && cd ~/repos/3d-o-mat
+./install-store.sh --key "ssh-ed25519 AAAA… 3d-o-mat-website"
+```
+
+Das Skript legt `/Volumes/T7/3d-o-mat` mit der Kennzeichen-Datei `.3d-o-mat` an. Es kopiert `store/launch.py` nach `~/Library/Application Support/3d-o-mat` und trägt den Schlüssel so in `~/.ssh/authorized_keys` ein, dass er nur dieses Skript starten darf (`restrict,command=…`). Ein zweiter Lauf ersetzt die Zeile. Danach auf Proxmox `bash /root/3d-o-mat-lxc.sh pruefen`.
+
+### 3. oi-o-mat: Schranke und MLX-Serve
+
+Die Schranke braucht den Stand mit mehreren Servern (scripts #19, gemergt). MLX-Serve wird einmal eingetragen:
 
 ```sh
 curl -X PATCH http://127.0.0.1:1235/gate/settings -H 'content-type: application/json' \
@@ -51,32 +81,9 @@ Die zweite Zeile funktioniert nur, wenn MLX-Serve läuft. Sie zeigt den Namen, u
 
 TRELLIS.2 braucht beim Rechnen deutlich mehr Speicher als im Leerlauf. Die Vorlage schätzt `ramGb: 18`. Damit das neben den anderen Apps geht, sollte `ramBudgetGb` der Schranke mindestens 18 sein (für immich-tagger ohnehin nötig). Den echten Spitzenwert beim ersten Lauf in der Aktivitätsanzeige ablesen und `ramGb` anpassen.
 
-### 3. Proxmox: Freigabe einbinden und Container
+### 4. Freigeben
 
-Auf dem Proxmox-Host:
-
-```sh
-apt install cifs-utils
-printf 'username=marcel\npassword=…\n' > /root/.smb-oi-o-mat && chmod 600 /root/.smb-oi-o-mat
-mkdir -p /mnt/oi-o-mat-3d
-# uid/gid 100000: root eines unprivilegierten LXC
-echo '//192.168.2.122/3d-o-mat /mnt/oi-o-mat-3d cifs credentials=/root/.smb-oi-o-mat,uid=100000,gid=100000,iocharset=utf8,_netdev,x-systemd.automount 0 0' >> /etc/fstab
-systemctl daemon-reload && mount /mnt/oi-o-mat-3d && ls -a /mnt/oi-o-mat-3d
-pct set <lxc-id> -mp0 /mnt/oi-o-mat-3d,mp=/mnt/3d-o-mat
-```
-
-Im LXC:
-
-```sh
-git clone https://github.com/Marcel-B/3d-o-mat.git && cd 3d-o-mat
-cp config.docker.json config.json
-docker compose up -d --build
-docker compose logs -f
-```
-
-Beim ersten Start meldet sich die App bei der Schranke an. In `http://192.168.2.122:1235/gate` dann bei **3d-o-mat** TRELLIS.2 freigeben, Gemma ebenfalls freigeben oder installieren. Danach ist die Website unter `http://<lxc>:8090` erreichbar. Beim ersten Freistellen lädt rembg sein Modell (etwa 1 GB) in das Volume `rembg-cache`.
-
-Aktualisieren: `git pull && docker compose up -d --build`.
+Beim ersten Start meldet sich die App bei der Schranke an. In `http://192.168.2.122:1235/gate` dann bei **3d-o-mat** TRELLIS.2 freigeben, Gemma ebenfalls freigeben oder installieren. Danach ist die Website unter `http://<container>:8090` erreichbar. Beim ersten Freistellen lädt rembg sein Modell (etwa 1 GB) in das Volume `rembg-cache`.
 
 ### Statt Proxmox: auf einem Mac
 
@@ -87,14 +94,13 @@ cp config.example.json config.json
 .venv/bin/python -m omat3d
 ```
 
-`config.example.json` bindet die Freigabe über `mountCommand` selbst ein (`osascript … mount volume`, das Passwort kommt aus dem Schlüsselbund), wenn sie fehlt. Sie erscheint dann unter `/Volumes/3d-o-mat`.
+`config.example.json` nimmt `"store": {"folder": "/Volumes/T7/3d-o-mat"}`. Ohne `ssh` ruft die Website `store/launch.py` selbst auf, mit demselben Kennzeichen `.3d-o-mat`.
 
 ## Einstellungen (`config.json`)
 
 | Feld | Bedeutung |
 | --- | --- |
-| `dataDir` | Datenordner, darin muss `.3d-o-mat` liegen |
-| `mountCommand` | Befehl, der die Freigabe einbindet, wenn sie fehlt (höchstens einmal je Minute) |
+| `store` | `{"ssh": "marcel@192.168.2.122", "key": "/ssh/id_ed25519", "knownHosts": "/ssh/known_hosts"}` für die T7 von oi-o-mat, oder `{"folder": "…"}` für einen eigenen Ordner |
 | `gate` | Anmeldung bei der Schranke: `url`, `app`, `note`, `priority`, `holdFor`, `models` (siehe docs/llm-gate.md im scripts-Repo) |
 | `trellisModel`, `assistModel` | welche der angemeldeten Modelle für 3D und für Gemma |
 | `defaults` | Vorgaben für `/v1/3d/generations`: `texture_size`, `decimation_target`, auch `resolution`, `steps` |
@@ -109,7 +115,7 @@ cp config.example.json config.json
 cd frontend && npm run dev
 ```
 
-`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma. Die Schranke ist dabei ein `httpx.MockTransport`.
+`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, unzulässige Pfade. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
 
 ## Später
 

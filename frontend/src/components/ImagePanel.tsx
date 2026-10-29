@@ -51,7 +51,7 @@ export function ImagePanel({ status, images, selected, onSelect, onChanged, onSt
     <div className="card">
       <h2><span className="step">1</span> Bild</h2>
       <label
-        className={`drop ${dragging ? 'over' : ''} ${status && !status.mounted ? 'disabled' : ''}`}
+        className={`drop ${dragging ? 'over' : ''} ${status && !status.storage.mounted ? 'disabled' : ''}`}
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={e => { e.preventDefault(); setDragging(false); upload(e.dataTransfer.files); }}
@@ -144,7 +144,7 @@ function ImageDetail({ image, status, busy, run, onChanged, onStarted, onDeleted
       <div className="row">
         <button
           className="primary"
-          disabled={!!busy || !status?.mounted}
+          disabled={!!busy || !status?.storage.mounted}
           onClick={() => run('Startet …', () => api.createJob(image.id, options)).then(job => job && onStarted(job))}
         >In 3D umwandeln</button>
         <span className="muted small">Dauert auf oi-o-mat etwa 5 bis 10 Minuten, Warten auf Tonwerk nicht eingerechnet.</span>
