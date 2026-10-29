@@ -15,6 +15,7 @@ from . import assist, cutout
 from .config import Config
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
 from .jobs import OPEN, Jobs
+from .paint import SIZES, Paintings
 from .store import NotMounted, Store, StoreError, new_id
 
 MAX_UPLOAD = 40 * 1024 * 1024
@@ -44,6 +45,14 @@ class RigRequest(BaseModel):
     seed: int = Field(1, ge=0, le=2**31 - 1)
 
 
+class PaintRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=2000)
+    model: str | None = None
+    n: int = Field(1, ge=1, le=4)
+    seed: int | None = Field(None, ge=0, le=2**31 - 1)
+    size: str = "1024x1024"
+
+
 class PromptRequest(BaseModel):
     idea: str = Field(..., min_length=1, max_length=1000)
 
@@ -63,7 +72,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
     @asynccontextmanager
     async def lifespan(_app):
         if register and config.gate:
-            threading.Thread(target=register_with_gate, args=({**config.gate, "url": config.gate_url, "app": config.app_name}, log),
+            threading.Thread(target=register_with_gate, args=({**config.gate, "models": config.gate_models(), "url": config.gate_url, "app": config.app_name}, log),
                              kwargs={"stop": jobs.stop}, daemon=True).start()
         jobs.start()
         if config.cutout in ("auto", "rembg"):
@@ -130,7 +139,8 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
                         "freeGb": storage.get("freeGb"), "error": storage.get("error")},
             "rembg": cutout.rembg_available(),
             "cutout": config.cutout,
-            "models": {"trellis": config.trellis_model, "assist": config.assist_model, "rig": config.rig_model},
+            "models": {"trellis": config.trellis_model, "assist": config.assist_model, "rig": config.rig_model,
+                       "paint": config.paint_models},
             "defaults": config.defaults,
             "gate": {
                 "url": config.gate_url,
@@ -140,10 +150,23 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
                 "held": (mine or {}).get("held"),
                 "models": models,
             },
-            "imageGeneration": None,  # kommt mit dem Bilddienst (img-o-mat)
+            "paint": {"models": [{"id": model, **models.get(model, {"state": None, "approved": False})}
+                                 for model in config.paint_models], "sizes": list(SIZES)},
         }
 
     # --- Bilder
+
+    def save_image(data: bytes, name: str, extra: dict) -> dict:
+        """Freistellen und mit dem Original auf die T7, für hochgeladene und gemalte Bilder."""
+        png, info = cutout.cut(data, config.cutout, config.rembg_model)
+        image_id = new_id()
+        store.put("images", image_id, extra["original"], data)
+        store.put("images", image_id, "cutout.png", png)
+        doc = {"id": image_id, "name": name, "cutout": info, "check": None, "created": image_id, **extra}
+        return store.write("images", doc)
+
+    paintings = Paintings(gate, save_image, log)
+    app.state.paintings = paintings
 
     @app.post("/api/images")
     async def upload(file_: UploadFile = File(..., alias="file")):
@@ -151,19 +174,16 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         data = await file_.read(MAX_UPLOAD + 1)
         if len(data) > MAX_UPLOAD:
             raise HTTPException(413, "Bild größer als 40 MB")
-        try:
-            # Im Thread: das Freistellen dauert Sekunden, die Seite fragt derweil weiter nach dem Stand.
-            png, info = await run_in_threadpool(cutout.cut, data, config.cutout, config.rembg_model)
-        except Exception as error:  # noqa: BLE001 – Pillow wirft je nach Format anderes
-            raise HTTPException(400, f"Kein lesbares Bild: {error}") from error
-        image_id = new_id()
         suffix = re.sub(r"[^a-z0-9]", "", Path(file_.filename or "").suffix.lower())[:5]
         suffix = suffix if suffix in TYPES else "bin"
-        store.put("images", image_id, f"original.{suffix}", data)
-        store.put("images", image_id, "cutout.png", png)
-        doc = {"id": image_id, "name": Path(file_.filename or "bild").stem[:80], "original": f"original.{suffix}",
-               "cutout": info, "check": None, "created": image_id}
-        return store.write("images", doc)
+        try:
+            # Im Thread: das Freistellen dauert Sekunden, die Seite fragt derweil weiter nach dem Stand.
+            return await run_in_threadpool(save_image, data, Path(file_.filename or "bild").stem[:80],
+                                           {"original": f"original.{suffix}"})
+        except (StoreError, NotMounted):
+            raise
+        except Exception as error:  # noqa: BLE001 – Pillow wirft je nach Format anderes
+            raise HTTPException(400, f"Kein lesbares Bild: {error}") from error
 
     @app.get("/api/images")
     def images():
@@ -193,7 +213,22 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         store.delete("images", image_id)
         return {"deleted": image_id}
 
-    # --- Prompts (Bilderzeugung folgt über img-o-mat)
+    # --- Malen (img-o-mat) und Prompts (Gemma)
+
+    @app.post("/api/paint")
+    def paint(request: PaintRequest):
+        store.ensure_mounted()
+        model = request.model or (config.paint_models[0] if config.paint_models else None)
+        if model not in config.paint_models:
+            raise HTTPException(422, f"model: {', '.join(config.paint_models) or 'keins eingestellt (paintModels)'}")
+        if request.size not in SIZES:
+            raise HTTPException(422, f"size: {', '.join(SIZES)}")
+        return paintings.start(request.prompt.strip(), model, request.n, request.seed, request.size)
+
+    @app.get("/api/paint")
+    def list_paintings():
+        return paintings.all()
+
 
     @app.post("/api/prompts")
     def prompts(request: PromptRequest):

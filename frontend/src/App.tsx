@@ -59,7 +59,7 @@ export default function App() {
             onChanged={refreshImages}
             onStarted={newJob => { refreshJobs(); setSelectedJob(newJob.id); }}
           />
-          <PromptPanel />
+          <PromptPanel status={status} onPainted={ids => { refreshImages(); setSelectedImage(ids[0]); }} />
         </section>
         <section className="column">
           <Viewer job={job} jobs={jobs ?? []} onRigStarted={rigJob => { refreshJobs(); setSelectedJob(rigJob.id); }} />

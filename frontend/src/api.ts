@@ -8,6 +8,7 @@ export type Image = {
   original: string;
   cutout: { method: 'alpha' | 'rembg' | 'flood' | 'none'; width: number; height: number; subject: number; note: string | null };
   check: Check | null;
+  painted?: { model: string; prompt: string; seed: number | null; revisedPrompt: string | null };
 };
 
 export type Options = {
@@ -43,7 +44,7 @@ export type Status = {
   storage: { where: string; mounted: boolean; root: string | null; freeGb: number | null; error: string | null };
   rembg: boolean;
   cutout: string;
-  models: { trellis: string; assist: string; rig: string };
+  models: { trellis: string; assist: string; rig: string; paint: string[] };
   defaults: Options;
   gate: {
     url: string;
@@ -53,6 +54,21 @@ export type Status = {
     held: string | null;
     models: Record<string, { state: string; approved: boolean; backend?: string }>;
   };
+  paint: { models: { id: string; state: string | null; approved: boolean }[]; sizes: string[] };
+};
+
+export type Painting = {
+  id: string;
+  prompt: string;
+  model: string;
+  n: number;
+  state: 'running' | 'done' | 'failed';
+  stage: 'queued' | 'sending' | 'loading' | 'painting' | 'checking' | 'cutout' | null;
+  place: number | null;
+  fraction: number | null;
+  imageIds: string[];
+  message: string | null;
+  seconds: number | null;
 };
 
 export type Prompts = { idea: string; prompts: string[]; note: string };
@@ -84,6 +100,8 @@ export const api = {
   check: (id: string) => call<Image>('POST', `/api/images/${id}/check`),
   deleteImage: (id: string) => call('DELETE', `/api/images/${id}`),
   prompts: (idea: string) => call<Prompts>('POST', '/api/prompts', { idea }),
+  paint: (prompt: string, model: string, n: number) => call<Painting>('POST', '/api/paint', { prompt, model, n }),
+  paintings: () => call<Painting[]>('GET', '/api/paint'),
   jobs: () => call<Job[]>('GET', '/api/jobs'),
   createJob: (imageId: string, options: Options) => call<Job>('POST', '/api/jobs', { imageId, options }),
   rigJob: (id: string, kind: string) => call<Job>('POST', `/api/jobs/${id}/rig`, { class: kind }),

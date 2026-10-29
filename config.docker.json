@@ -9,7 +9,7 @@
   "gate": {
     "url": "http://192.168.2.122:1235",
     "app": "3d-o-mat",
-    "note": "Bild zu 3D (TRELLIS.2 in MLX-Serve), Skelett (SkinTokens) und Bildprüfung/Prompts (Gemma); Website im Proxmox-LXC, Dateien auf der T7",
+    "note": "Bild zu 3D (TRELLIS.2 in MLX-Serve), Skelett (SkinTokens), Bilder malen (img-o-mat) und Bildprüfung/Prompts (Gemma); Website im Proxmox-LXC, Dateien auf der T7",
     "priority": 30,
     "holdFor": "songs images video ace",
     "models": [
@@ -30,12 +30,24 @@
       {
         "model": "skintokens",
         "backend": "rig"
+      },
+      {
+        "model": "klein-4b",
+        "backend": "images"
+      },
+      {
+        "model": "z-image-turbo",
+        "backend": "images"
       }
     ]
   },
   "trellisModel": "ddalcu/TRELLIS.2-4B-MLX-Serve-8bit",
   "assistModel": "gemma-4-26b-a4b-it-qat-mlx",
   "rigModel": "skintokens",
+  "paintModels": [
+    "klein-4b",
+    "z-image-turbo"
+  ],
   "defaults": {
     "texture_size": 2048,
     "decimation_target": 300000

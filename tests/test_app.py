@@ -63,7 +63,25 @@ class FakeGate:
             body = json.loads(request.content)
             assert body["stream"] is True and body["model"] == "trellis" and body["texture_size"] == 1024
             return self.answers.pop(0)
+        if request.url.path == "/v1/images/generations":
+            assert request.headers["authorization"] == "Bearer 3d-o-mat"
+            body = json.loads(request.content)
+            assert body["stream"] is True and body["model"] in ("klein-4b", "z-image-turbo") and body["size"] == "1024x1024"
+            if "forbidden" in body["prompt"]:
+                return paint_stream(("error", {"error": {"message": "nsfw", "type": "img_o_mat", "code": 422}}))
+            jpeg = io.BytesIO()
+            Image.open(io.BytesIO(disc_on_white())).convert("RGB").save(jpeg, "JPEG")
+            pictures = [("image", {"index": index, "b64_json": base64.b64encode(jpeg.getvalue()).decode(), "seed": 7 + index,
+                                   "revised_prompt": None, "paintSeconds": 3.2}) for index in range(body["n"])]
+            return paint_stream(("started", {"id": "j1", "seed": 7}), ("queued", {"place": 1}),
+                                ("progress", {"stage": "painting", "fraction": 0.5}), *pictures, ("done", {"count": body["n"]}))
         return httpx.Response(404, json={"error": {"message": "unbekannt"}})
+
+
+def paint_stream(*events):
+    """img-o-mats Server-Sent Events: mit Namen (event:), dazwischen ein Ping-Kommentar."""
+    text = ": ping\n\n" + "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events)
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=text.encode())
 
 
 def done_stream():
@@ -245,3 +263,44 @@ def test_rig_failure_is_reported(tmp_path):
         model = wait_for(client, client.post("/api/jobs", json={"imageId": upload(client)["id"]}).json()["id"])
         rig = wait_for(client, client.post(f"/api/jobs/{model['id']}/rig", json={}).json()["id"])
         assert rig["state"] == "failed" and "kein Mensch" in rig["message"]
+
+
+def wait_for_painting(client, painting_id, timeout=10):
+    until = time.time() + timeout
+    while time.time() < until:
+        painting = next(p for p in client.get("/api/paint").json() if p["id"] == painting_id)
+        if painting["state"] != "running":
+            return painting
+        time.sleep(0.05)
+    raise AssertionError(f"Malen hängt: {painting}")
+
+
+def test_paint_puts_pictures_into_the_list(make):
+    with make([])[0] as client:
+        assert client.post("/api/paint", json={"prompt": "a red disc", "model": "midjourney"}).status_code == 422
+        assert client.post("/api/paint", json={"prompt": "a red disc", "size": "17x17"}).status_code == 422
+        painting = client.post("/api/paint", json={"prompt": "a red disc", "n": 2}).json()
+        assert painting["model"] == "klein-4b" and painting["state"] == "running"
+        painting = wait_for_painting(client, painting["id"])
+        assert painting["state"] == "done" and len(painting["imageIds"]) == 2, painting
+        images = {image["id"]: image for image in client.get("/api/images").json()}
+        first = images[painting["imageIds"][0]]
+        assert first["original"] == "original.jpg" and first["painted"]["prompt"] == "a red disc" and first["painted"]["seed"] == 7
+        assert first["cutout"]["method"] == "flood"
+        assert client.get(f"/api/images/{first['id']}/original").headers["content-type"] == "image/jpeg"
+        assert client.get("/api/status").json()["paint"]["models"][0]["id"] == "klein-4b"
+
+
+def test_paint_held_back_by_the_content_filter(make):
+    with make([])[0] as client:
+        painting = wait_for_painting(client, client.post("/api/paint", json={"prompt": "forbidden"}).json()["id"])
+        assert painting["state"] == "failed" and "Inhaltsfilter" in painting["message"] and painting["imageIds"] == []
+
+
+def test_gate_models_add_what_an_old_config_lacks():
+    config = Config(gate={"models": [{"model": "gemma-4-26b-a4b-it-qat-mlx", "context": 4096}]})
+    models = {entry["model"]: entry for entry in config.gate_models()}
+    assert models["gemma-4-26b-a4b-it-qat-mlx"]["context"] == 4096
+    assert models["klein-4b"]["backend"] == "images" and models["skintokens"]["backend"] == "rig"
+    assert models["ddalcu/TRELLIS.2-4B-MLX-Serve-8bit"]["ramGb"] == 12
+    assert len(config.gate_models()) == len(models)

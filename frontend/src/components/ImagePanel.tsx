@@ -101,6 +101,9 @@ function ImageDetail({ image, status, busy, run, onChanged, onStarted, onDeleted
         <figure className="checker"><img src={cutoutUrl(image.id)} alt="Freigestellt" /><figcaption>geht an TRELLIS.2 · {methods[image.cutout.method]}</figcaption></figure>
       </div>
       {image.cutout.note && <div className="hint">{image.cutout.note}</div>}
+      {image.painted && (
+        <div className="muted small painted">Gemalt mit {image.painted.model}{image.painted.seed !== null && <>, Seed {image.painted.seed}</>}: „{image.painted.prompt}“</div>
+      )}
 
       <div className="row">
         <button onClick={() => run('Gemma prüft …', api.check.bind(null, image.id)).then(r => r && onChanged())} disabled={!!busy}>

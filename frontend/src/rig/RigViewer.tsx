@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { RigStage, type Clip, type Facts } from './stage';
 
-const clips: [Clip, string][] = [['walk', 'Gehen'], ['punch', 'Schlag'], ['arms', 'Arme heben'], ['squat', 'Kniebeuge']];
+const clips: [Clip, string][] = [
+  ['walk', 'Gehen'], ['punch', 'Schlag'], ['kick', 'Tritt'], ['arms', 'Arme heben'], ['squat', 'Kniebeuge'], ['fall', 'Umfallen'],
+];
 
 // Ein GLB mit Skelett ansehen und bewegen: Proben, Knochen von Hand, Skelett und Drahtgitter.
 export function RigViewer({ url }: { url: string }) {
