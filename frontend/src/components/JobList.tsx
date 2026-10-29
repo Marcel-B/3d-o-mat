@@ -10,6 +10,20 @@ const states: Record<Job['state'], string> = {
 };
 const tones: Record<Job['state'], string> = { queued: 'muted', waiting: 'warn', running: 'ok', done: 'ok', failed: 'bad', canceled: 'muted' };
 
+// TRELLIS.2 meldet Stufen wie "trellis-shape-1024"; lesbar: "Form (1024)". Unbekannte bleiben, wie sie sind.
+const stages: [RegExp, string][] = [
+  [/sparse|structure/, 'Grobform'],
+  [/shape|geometry|mesh/, 'Form'],
+  [/tex|paint|material|bake/, 'Textur'],
+  [/decimat|simplif|export|glb/, 'Abschluss'],
+];
+function stageLabel(stage: string | null) {
+  if (!stage) return '';
+  const found = stages.find(([pattern]) => pattern.test(stage));
+  const size = /(\d{3,4})$/.exec(stage)?.[1];
+  return found ? `${found[1]}${size ? ` (${size})` : ''}` : stage;
+}
+
 function duration(job: Job) {
   if (job.seconds !== null) return `${Math.floor(job.seconds / 60)}:${String(job.seconds % 60).padStart(2, '0')} min`;
   if (job.started) {
@@ -47,10 +61,11 @@ export function JobList({ jobs, selected, onSelect, onChanged }: Props) {
               </div>
               {job.state === 'running' && job.total ? (
                 <div className="progress" title={`${job.stage} ${job.step}/${job.total}`}>
-                  <div style={{ width: `${Math.round(((job.step ?? 0) / job.total) * 100)}%` }} />
-                  <span>{job.stage} {job.step}/{job.total}</span>
+                  <div className="bar" style={{ width: `${Math.round(((job.step ?? 0) / job.total) * 100)}%` }} />
+                  <span>{stageLabel(job.stage)}</span>
+                  <span className="count">{job.step}/{job.total}</span>
                 </div>
-              ) : job.state === 'running' && job.stage ? <div className="muted small">{job.stage}</div> : null}
+              ) : job.state === 'running' && job.stage ? <div className="muted small">{stageLabel(job.stage)}</div> : null}
               {job.message && <div className={`small ${job.state === 'failed' ? 'bad' : 'muted'}`}>{job.message}</div>}
             </div>
             <div className="actions" onClick={e => e.stopPropagation()}>

@@ -8,8 +8,8 @@ services:
       - "8090:8090"
     volumes:
       - ./config.json:/config/config.json:ro
-      # Der Mountpoint im LXC, an dem die Freigabe der T7 von oi-o-mat ankommt (mp0, siehe README).
-      - /mnt/3d-o-mat:/data
+      # Schlüssel für die Ablage auf oi-o-mat (deploy/proxmox/3d-o-mat-lxc.sh legt ihn an).
+      - ./ssh:/ssh
       - rembg-cache:/cache
 volumes:
   rembg-cache:

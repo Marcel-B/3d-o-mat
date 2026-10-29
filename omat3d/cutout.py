@@ -2,7 +2,9 @@
 ganze Bild zum Objekt. Deshalb bekommt es ein PNG mit echtem Alphakanal, auf das Objekt zugeschnitten und quadratisch.
 
 - Hat das Bild schon Transparenz, bleibt sie, wie sie ist.
-- Mit rembg (requirements-rembg.txt, BiRefNet auf der CPU des mac-mini) für Fotos mit beliebigem Hintergrund.
+- Mit rembg (requirements-rembg.txt, auf der CPU des Containers) für Fotos mit beliebigem Hintergrund. Vorgabe ist
+  isnet-general-use: auf einem 12-MP-Foto 9 s und 1,5 GB; birefnet-general brauchte 115 s und 9,5 GB, mehr als der
+  Container hat (gemessen 2026-10-29, 4 Kerne).
 - Sonst ein einfarbiger Hintergrund, vom Rand aus geflutet, wie gen.mjs cutout in MLX-Serve.
 """
 import io
@@ -13,8 +15,12 @@ from PIL import Image, ImageOps
 from scipy import ndimage
 
 MAX_SIDE = 1024
+# Größer braucht keiner der Schritte; ein Handyfoto (4000 px) kostet sonst nur Speicher und Zeit.
+MAX_INPUT = 2048
 _rembg = {}
 _rembg_lock = threading.Lock()
+# Immer nur ein Freistellen zugleich: jedes hält das Modell und das Bild im Speicher.
+_cut_lock = threading.Lock()
 
 
 def rembg_available() -> bool:
@@ -60,14 +66,30 @@ def flood(image: Image.Image, tolerance: int = 40) -> Image.Image:
     return Image.fromarray(rgba, "RGBA")
 
 
-def with_rembg(image: Image.Image, model: str) -> Image.Image:
-    from rembg import new_session, remove
+def _session(model: str):
+    from rembg import new_session
 
     with _rembg_lock:
         if model not in _rembg:
             _rembg[model] = new_session(model)
-        session = _rembg[model]
-    return remove(image.convert("RGB"), session=session).convert("RGBA")
+        return _rembg[model]
+
+
+def warm(model: str, log=print) -> None:
+    """Lädt das Modell vorab (beim ersten Mal auch herunter), damit das erste Hochladen nicht darauf wartet."""
+    if not rembg_available():
+        return
+    try:
+        _session(model)
+        log(f"rembg bereit ({model})")
+    except Exception as error:  # noqa: BLE001 – ohne Netz oder mit falschem Namen geht es ohne weiter
+        log(f"rembg-Modell {model} nicht ladbar: {error}")
+
+
+def with_rembg(image: Image.Image, model: str) -> Image.Image:
+    from rembg import remove
+
+    return remove(image.convert("RGB"), session=_session(model)).convert("RGBA")
 
 
 def frame(image: Image.Image, margin: float = 0.08) -> Image.Image:
@@ -87,8 +109,15 @@ def frame(image: Image.Image, margin: float = 0.08) -> Image.Image:
 
 def cut(data: bytes, method: str = "auto", rembg_model: str = "birefnet-general") -> tuple[bytes, dict]:
     """Gibt das PNG für TRELLIS.2 und eine Auskunft zurück: method, width, height, subject (Anteil des Objekts)."""
+    with _cut_lock:
+        return _cut(data, method, rembg_model)
+
+
+def _cut(data: bytes, method: str, rembg_model: str) -> tuple[bytes, dict]:
     image = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
     image.load()
+    if max(image.size) > MAX_INPUT:
+        image.thumbnail((MAX_INPUT, MAX_INPUT), Image.LANCZOS)
     if _has_alpha(image):
         used, result = "alpha", image.convert("RGBA")
     elif method == "none":

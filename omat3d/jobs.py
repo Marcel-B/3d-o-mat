@@ -1,12 +1,12 @@
 """Die Aufträge: Bild zu 3D, einer nach dem anderen (TRELLIS.2 braucht oi-o-mat ohnehin ganz). Jeder Auftrag liegt als
-job.json auf der T7; nach einem Neustart der App werden unterbrochene Aufträge neu eingereiht.
+job.json auf der T7 (über store.py); nach einem Neustart der App werden unterbrochene Aufträge neu eingereiht.
 """
 import threading
 import time
 from datetime import datetime
 
 from .gate import Gate, GateBusy, GateRefused, StreamBroken
-from .store import Store, read_json, write_json
+from .store import NotMounted, Store, StoreError, new_id
 
 OPEN = ("queued", "waiting", "running")
 # Wie oft ein Auftrag nach einem abgerissenen Stream oder einer 503 neu startet, bevor er als fehlgeschlagen gilt.
@@ -29,18 +29,15 @@ class Jobs:
         self.wake = threading.Event()
         self.stop = threading.Event()
         self.current = None
+        self.recovered = False
 
     # --- Ablage
 
-    def path(self, job_id: str):
-        return self.store.dir("jobs", job_id)
-
     def get(self, job_id: str) -> dict:
-        return read_json(self.path(job_id) / "job.json")
+        return self.store.read("jobs", job_id)
 
     def save(self, job: dict) -> dict:
-        write_json(self.path(job["id"]) / "job.json", job)
-        return job
+        return self.store.write("jobs", job)
 
     def update(self, job_id: str, **changes) -> dict:
         with self.lock:
@@ -49,12 +46,13 @@ class Jobs:
             return self.save(job)
 
     def all(self) -> list[dict]:
-        return self.store.list("jobs", "job.json")
+        return self.store.list("jobs")
 
     # --- Aufträge
 
     def create(self, image: dict, options: dict) -> dict:
-        job_id, path = self.store.create("jobs")
+        self.store.ensure_mounted()
+        job_id = new_id()
         job = {
             "id": job_id, "imageId": image["id"], "imageName": image.get("name"), "options": options,
             "state": "queued", "stage": None, "step": None, "total": None, "message": None,
@@ -92,8 +90,12 @@ class Jobs:
     def run(self) -> None:
         while not self.stop.is_set():
             try:
+                # Erst wenn die T7 da ist, lässt sich sehen, was ein Neustart unterbrochen hat.
+                if not self.recovered and self.store.mounted:
+                    self.recover()
+                    self.recovered = True
                 job = self.next_job() if self.store.mounted else None
-            except OSError as error:
+            except (OSError, StoreError, NotMounted) as error:
                 self.log(f"Aufträge nicht lesbar: {error}")
                 job = None
             if not job:
@@ -108,7 +110,7 @@ class Jobs:
         started = time.monotonic()
         broken = busy = 0
         try:
-            png = (self.store.dir("images", job["imageId"]) / "cutout.png").read_bytes()
+            png = self.store.get("images", job["imageId"], "cutout.png")
             options = {**self.defaults, **job["options"]}
             while True:
                 self.update(job_id, attempts=job["attempts"] + broken + busy + 1)
@@ -127,11 +129,8 @@ class Jobs:
                         raise
                     self.update(job_id, state="waiting", message=f"{error}; neuer Versuch in {int(error.retry_after)} s")
                     self.stop.wait(error.retry_after)
-            # Erst ganz geschrieben, dann umbenannt: nie ein halbes GLB.
-            target = self.path(job_id) / "model.glb"
-            temp = target.with_suffix(".glb.tmp")
-            temp.write_bytes(glb)
-            temp.replace(target)
+            # launch.py schreibt daneben und benennt dann um: nie ein halbes GLB auf der T7.
+            self.store.put("jobs", job_id, "model.glb", glb)
             seconds = round(time.monotonic() - started)
             self.update(job_id, state="done", finished=now(), seconds=seconds, glbBytes=len(glb), message=None, stage=None)
             self.log(f"{job_id}: fertig in {seconds} s, {len(glb) // 1024} KB")
@@ -172,5 +171,5 @@ class Jobs:
                     continue
                 if message != job.get("message"):
                     self.update(job_id, message=message)
-            except (OSError, KeyError, ValueError):
+            except (OSError, KeyError, ValueError, StoreError, NotMounted):
                 continue

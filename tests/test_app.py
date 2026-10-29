@@ -1,8 +1,11 @@
-"""Der ganze Weg ohne oi-o-mat: die Schranke ist ein httpx.MockTransport, die T7 ein temporärer Ordner."""
+"""Der ganze Weg ohne oi-o-mat: die Schranke ist ein httpx.MockTransport, die T7 ein temporärer Ordner, den
+store/launch.py verwaltet, einmal direkt und einmal über ein nachgestelltes ssh (tests/fake/ssh)."""
 import base64
 import io
 import json
+import os
 import time
+from pathlib import Path
 
 import httpx
 import numpy as np
@@ -14,7 +17,10 @@ from omat3d import cutout
 from omat3d.app import create_app
 from omat3d.config import Config
 from omat3d.gate import Gate
-from omat3d.store import MARKER
+from omat3d.store import Store
+
+MARKER = ".3d-o-mat"
+FAKE_SSH = Path(__file__).resolve().parent / "fake"
 
 GLB = b"glTF\x02\x00\x00\x00fake"
 
@@ -66,16 +72,22 @@ def done_stream():
         {"type": "complete", "format": "glb", "data": base64.b64encode(GLB).decode()}))
 
 
-@pytest.fixture
-def make(tmp_path):
+@pytest.fixture(params=["folder", "ssh"])
+def make(tmp_path, request, monkeypatch):
     def build(answers, mounted=True):
         if mounted:
             (tmp_path / MARKER).write_text("")
         fake = FakeGate(answers)
-        config = Config(data_dir=str(tmp_path), trellis_model="trellis", assist_model="gemma",
-                        defaults={"texture_size": 1024}, cutout="flood")
+        config = Config(trellis_model="trellis", assist_model="gemma", defaults={"texture_size": 1024}, cutout="flood")
+        if request.param == "ssh":
+            # Wie sshd mit dem erzwungenen Befehl: das nachgestellte ssh ruft launch.py --ssh auf.
+            monkeypatch.setenv("PATH", f"{FAKE_SSH}{os.pathsep}{os.environ['PATH']}")
+            monkeypatch.setenv("OMAT3D_STORE_FOLDER", str(tmp_path))
+            store = Store(ssh="marcel@oi-o-mat", key="/ssh/id_ed25519", log=lambda *_: None)
+        else:
+            store = Store(folder=str(tmp_path), log=lambda *_: None)
         gate = Gate("http://gate", "3d-o-mat", transport=httpx.MockTransport(fake))
-        app = create_app(config, gate=gate, register=False, log=lambda *_: None)
+        app = create_app(config, gate=gate, store=store, register=False, log=lambda *_: None)
         app.state.jobs.stop.wait = lambda seconds: time.sleep(0.01)  # Retry-After im Test nicht abwarten
         return TestClient(app), fake
     return build
@@ -123,7 +135,8 @@ def test_image_to_glb(make):
         download = client.get(f"/api/jobs/{job['id']}/model.glb?download=true")
         assert download.content == GLB
         assert "scheibe-" in download.headers["content-disposition"]
-        assert client.get("/api/status").json()["gate"]["registered"] is True
+        status = client.get("/api/status").json()
+        assert status["gate"]["registered"] is True and status["storage"]["mounted"] is True
 
 
 def test_broken_stream_and_busy_are_retried(make):
@@ -164,3 +177,23 @@ def test_bad_options_are_refused(make):
         image = upload(client)
         assert client.post("/api/jobs", json={"imageId": image["id"], "options": {"texture_size": 1000}}).status_code == 422
         assert client.post("/api/jobs", json={"imageId": "../../etc"}).status_code == 404
+
+
+def test_store_refuses_paths_outside(tmp_path):
+    (tmp_path / MARKER).write_text("")
+    store = Store(folder=str(tmp_path), log=lambda *_: None)
+    with pytest.raises(Exception, match="unzulässig"):
+        store.run("put", "images", "../../etc", "passwd", data=b"x")
+    with pytest.raises(Exception, match="unzulässig"):
+        store.run("get", "jobs", "20261029-000000-abcd", "../job.json")
+    with pytest.raises(Exception, match="Aufruf"):
+        store.run("rm", "-rf", "/")
+
+
+def test_files_land_on_the_drive(make, tmp_path):
+    with make([done_stream()])[0] as client:
+        image = upload(client)
+        job = wait_for(client, client.post("/api/jobs", json={"imageId": image["id"]}).json()["id"])
+        assert (tmp_path / "images" / image["id"] / "cutout.png").is_file()
+        assert (tmp_path / "jobs" / job["id"] / "model.glb").read_bytes() == GLB
+        assert json.loads((tmp_path / "jobs" / job["id"] / "job.json").read_text())["state"] == "done"

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stands in for ssh in the tests: what sshd does with the website's key, which may only run store/launch.py --ssh.
+# The last argument is the remote command; the folder comes from OMAT3D_STORE_FOLDER.
+for last; do :; done
+SSH_ORIGINAL_COMMAND="$last" exec python3 "$(dirname "$0")/../../store/launch.py" --ssh

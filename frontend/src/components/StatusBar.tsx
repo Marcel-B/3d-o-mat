@@ -17,7 +17,11 @@ export function StatusBar({ status, error }: { status: Status | null; error: str
   const trellis = gate.models[status.models.trellis];
   return (
     <div className="status">
-      <Pill tone={status.mounted ? 'ok' : 'bad'} label={status.mounted ? 'T7 verbunden' : 'T7 nicht verbunden'} title={status.dataDir} />
+      <Pill
+        tone={status.storage.mounted ? 'ok' : 'bad'}
+        label={status.storage.mounted ? `T7${status.storage.freeGb !== null ? ` · ${Math.round(status.storage.freeGb)} GB frei` : ''}` : 'T7 nicht erreichbar'}
+        title={status.storage.error ?? `${status.storage.where}:${status.storage.root ?? ''}`}
+      />
       <Pill tone={gate.reachable ? 'ok' : 'bad'} label={gate.reachable ? 'Schranke erreichbar' : 'Schranke antwortet nicht'} title={gate.url} />
       {tonwerk && (
         <Pill
