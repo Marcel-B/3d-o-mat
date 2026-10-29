@@ -34,13 +34,16 @@ export function Viewer({ job, jobs, onRigStarted }: Props) {
   const [error, setError] = useState<string | null>(null);
   // Schon ein Skelett für dieses Modell in Arbeit oder fertig? Dann zeigt der Knopf darauf, statt ein zweites zu starten.
   const existing = job && !rigged ? jobs.find(j => j.kind === 'rig' && j.sourceJobId === job.id && j.state !== 'failed' && j.state !== 'canceled') : undefined;
+  // Derselbe Seed gibt dasselbe Skelett. Der Rig-Dienst probiert je Auftrag drei Seeds; ein neuer Versuch nach einem
+  // Fehlschlag fängt bei den nächsten drei an.
+  const failed = job && !rigged ? jobs.filter(j => j.kind === 'rig' && j.sourceJobId === job.id && j.state === 'failed').length : 0;
 
   async function rig() {
     if (!job) return;
     if (existing) return onRigStarted(existing);
     setBusy(true); setError(null);
     try {
-      onRigStarted(await api.rigJob(job.id, kind));
+      onRigStarted(await api.rigJob(job.id, kind, 1 + 3 * failed));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -72,7 +75,7 @@ export function Viewer({ job, jobs, onRigStarted }: Props) {
       )}
       {ready && !rigged && (
         <div className="row rig-start">
-          <button type="button" onClick={rig} disabled={busy}>{existing ? 'Zum Modell mit Skelett' : busy ? 'Startet …' : 'Skelett einsetzen'}</button>
+          <button type="button" onClick={rig} disabled={busy}>{existing ? 'Zum Modell mit Skelett' : busy ? 'Startet …' : failed ? 'Nochmal mit anderen Seeds' : 'Skelett einsetzen'}</button>
           {!existing && (
             <select id="rig-class" value={kind} onChange={e => setKind(e.target.value)} aria-label="Art der Figur">
               <option value="humanoid">Mensch (Mixamo-Namen)</option>
@@ -80,7 +83,11 @@ export function Viewer({ job, jobs, onRigStarted }: Props) {
               <option value="custom">Sonstiges</option>
             </select>
           )}
-          <span className="muted small">SkinTokens auf oi-o-mat, etwa eine halbe Minute. Danach lässt sich die Figur hier bewegen.</span>
+          <span className="muted small">
+            {failed
+              ? 'Hat SkinTokens kein Menschen-Skelett gefunden, hilft oft ein anderer Seed; sonst „Sonstiges“ (Knochen ohne Mixamo-Namen, die Proben bewegen dann nichts).'
+              : 'SkinTokens auf oi-o-mat, etwa eine halbe Minute, bei einem schwierigen Modell bis zu drei Versuche. Danach lässt sich die Figur hier bewegen.'}
+          </span>
         </div>
       )}
       {error && <div className="error">{error}</div>}

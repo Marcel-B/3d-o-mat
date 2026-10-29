@@ -104,7 +104,7 @@ export const api = {
   paintings: () => call<Painting[]>('GET', '/api/paint'),
   jobs: () => call<Job[]>('GET', '/api/jobs'),
   createJob: (imageId: string, options: Options) => call<Job>('POST', '/api/jobs', { imageId, options }),
-  rigJob: (id: string, kind: string) => call<Job>('POST', `/api/jobs/${id}/rig`, { class: kind }),
+  rigJob: (id: string, kind: string, seed = 1) => call<Job>('POST', `/api/jobs/${id}/rig`, { class: kind, seed }),
   // Die Proben als Animationen im GLB; zurück kommt die Datei.
   animatedGlb: async (id: string, clips: unknown[]) => {
     const response = await fetch(`/api/jobs/${id}/animated.glb`, {
