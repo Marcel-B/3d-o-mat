@@ -14,7 +14,7 @@
       {
         "model": "ddalcu/TRELLIS.2-4B-MLX-Serve-8bit",
         "backend": "mlx-serve",
-        "ramGb": 18,
+        "ramGb": 12,
         "sizeGb": 9.6,
         "idleUnloadMinutes": 2
       },
