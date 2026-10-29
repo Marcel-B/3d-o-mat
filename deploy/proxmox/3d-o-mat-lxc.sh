@@ -42,7 +42,7 @@ hilfe() {
     cat <<EOF
 3d-o-mat in einem Proxmox-LXC-Container installieren oder aktualisieren (auf dem PVE-Host als root).
 
-Aufruf: $AUFRUF [-y] [anlegen | app <CTID> | schluessel <CTID> | update <CTID> | pruefen <CTID>]
+Aufruf: $AUFRUF [-y] [anlegen | app <CTID> | schluessel <CTID> | update <CTID> | autoupdate <CTID> [on|off|status|run] | pruefen <CTID>]
 
   (ohne)            alles der Reihe nach: anlegen, app
   anlegen           Schritt 1: Container anlegen (oder den namens $CT_HOSTNAME nehmen) und Docker installieren
@@ -50,6 +50,9 @@ Aufruf: $AUFRUF [-y] [anlegen | app <CTID> | schluessel <CTID> | update <CTID> |
                     am Ende steht der Befehl für oi-o-mat (install-store.sh --key …)
   schluessel <CTID> den öffentlichen Schlüssel der Website noch einmal zeigen
   update <CTID>     git pull und neu bauen; config.json und Schlüssel bleiben
+  autoupdate <CTID> [on|off|status|run]
+                    Auto-Update im Container: alle 5 Minuten main holen und neu bauen, wenn kein Auftrag offen ist
+                    (systemd-Timer 3d-o-mat-update; app schaltet es ein)
   pruefen <CTID>    App, Ablage auf oi-o-mat und Schranke prüfen
   -y                ohne Rückfragen, Werte aus Umgebungsvariablen
 
@@ -209,10 +212,55 @@ print(json.dumps(config, indent=2, ensure_ascii=False))' "$GATE_URL" "$OI_USER@$
     info "Baue und starte (beim ersten Mal einige Minuten)"
     im_ct bash -c "cd '$APP_DIR' && docker compose up -d --build --remove-orphans" >/dev/null
     pruefen || true
+    autoupdate on
     echo >&2
     info "Jetzt auf oi-o-mat, im Checkout von 3d-o-mat (git clone $REPO_URL), einmal:"
     printf '\n  ./install-store.sh --key "%s"\n\n' "$(schluessel)" >&2
     info "Danach: $AUFRUF pruefen $CTID"
+}
+
+# Der Timer ruft update-in-ct.sh aus dem Checkout auf; so kommt mit jedem Update auch dessen neue Fassung.
+autoupdate() {
+    case ${1:-on} in
+        on)
+            im_ct bash -c "cat > /etc/systemd/system/3d-o-mat-update.service <<'UNIT'
+[Unit]
+Description=3d-o-mat: main holen und neu bauen, wenn kein Auftrag offen ist
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $APP_DIR/deploy/proxmox/update-in-ct.sh
+UNIT
+cat > /etc/systemd/system/3d-o-mat-update.timer <<'UNIT'
+[Unit]
+Description=3d-o-mat: Auto-Update alle 5 Minuten
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload && systemctl enable --now 3d-o-mat-update.timer >/dev/null"
+            ok "Auto-Update an: alle 5 Minuten, nur wenn kein Auftrag offen ist (Log: pct exec $CTID -- journalctl -u 3d-o-mat-update)"
+            ;;
+        off)
+            im_ct bash -c 'systemctl disable --now 3d-o-mat-update.timer >/dev/null 2>&1; rm -f /etc/systemd/system/3d-o-mat-update.{service,timer}; systemctl daemon-reload'
+            ok "Auto-Update aus"
+            ;;
+        status)
+            im_ct systemctl list-timers 3d-o-mat-update.timer --no-pager || true
+            im_ct journalctl -u 3d-o-mat-update -n 15 --no-pager || true
+            ;;
+        run)
+            im_ct systemctl start 3d-o-mat-update.service
+            im_ct journalctl -u 3d-o-mat-update -n 15 --no-pager || true
+            ;;
+        *) abbruch "autoupdate: on, off, status oder run" ;;
+    esac
 }
 
 update() {
@@ -262,7 +310,11 @@ while [[ $# -gt 0 ]]; do
         -h | --help) hilfe; exit 0 ;;
         -y) NICHT_FRAGEN=1 ;;
         anlegen) SCHRITT=$1 ;;
-        app | schluessel | update | pruefen)
+        on | off | status | run)
+            [[ ${SCHRITT:-} == autoupdate ]] || { hilfe; abbruch "Unbekannt: $1"; }
+            AKTION=$1
+            ;;
+        app | schluessel | update | pruefen | autoupdate)
             SCHRITT=$1
             if [[ $# -ge 2 && $2 =~ ^[0-9]+$ ]]; then
                 CTID=$2
@@ -282,6 +334,7 @@ case $SCHRITT in
     app) app ;;
     schluessel) schluessel ;;
     update) update ;;
+    autoupdate) autoupdate "${AKTION:-on}" ;;
     pruefen) pruefen ;;
     alles) anlegen; app ;;
 esac
