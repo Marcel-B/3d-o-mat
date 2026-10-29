@@ -51,7 +51,7 @@ export function Viewer({ job, jobs, onRigStarted }: Props) {
   return (
     <div className="card viewer">
       <h2><span className="step">3</span> {rigged ? 'Modell mit Skelett' : 'Modell'}</h2>
-      {ready && rigged ? <RigViewer key={job.id} url={modelUrl(job.id)} /> : (
+      {ready && rigged ? <RigViewer key={job.id} url={modelUrl(job.id)} jobId={job.id} /> : (
       <div className="stage">
         {ready ? (
           <model-viewer key={job.id} src={modelUrl(job.id)} alt={job.imageName ?? '3D-Modell'} camera-controls auto-rotate

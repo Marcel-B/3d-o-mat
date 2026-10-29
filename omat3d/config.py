@@ -25,6 +25,8 @@ class Config:
     assist_model: str = "gemma-4-26b-a4b-it-qat-mlx"
     # Skelett und Gewichte (SkinTokens, Rig-Dienst auf oi-o-mat, Server "rig" der Schranke).
     rig_model: str = "skintokens"
+    # Bilder malen (img-o-mat, Server "images" der Schranke); das erste ist die Vorgabe auf der Seite.
+    paint_models: list = field(default_factory=lambda: ["klein-4b", "z-image-turbo"])
     # Was an /v1/3d/generations geht, wenn der Auftrag nichts anderes sagt.
     defaults: dict = field(default_factory=lambda: {"texture_size": 2048, "decimation_target": 300000})
     # Freistellen: "auto" (rembg, wenn installiert, sonst einfarbiger Hintergrund), "rembg", "flood" oder "none".
@@ -41,11 +43,34 @@ class Config:
     def app_name(self) -> str:
         return self.gate.get("app", "3d-o-mat")
 
+    def gate_models(self) -> list[dict]:
+        """Die Modelle für die Anmeldung: die aus gate.models, dazu jedes Modell, das 3d-o-mat benutzt und das dort
+        fehlt, mit der Angabe aus GATE_MODELS. So kommt ein neues Modell auch in eine config.json, die vor ihm
+        angelegt wurde (die im Container bleibt bei update stehen)."""
+        listed = list(self.gate.get("models") or [])
+        named = {entry.get("model") for entry in listed}
+        for model in [self.trellis_model, self.assist_model, self.rig_model, *self.paint_models]:
+            if model not in named and model in GATE_MODELS:
+                listed.append({"model": model, **GATE_MODELS[model]})
+                named.add(model)
+        return listed
+
+
+# Was die Schranke über die Modelle wissen muss, wie in config.example.json.
+GATE_MODELS = {
+    "ddalcu/TRELLIS.2-4B-MLX-Serve-8bit": {"backend": "mlx-serve", "ramGb": 12, "sizeGb": 9.6, "idleUnloadMinutes": 2},
+    "gemma-4-26b-a4b-it-qat-mlx": {"source": "lmstudio-community/gemma-4-26b-a4b-it-qat-mlx", "context": 8192,
+                                   "ramGb": 15, "sizeGb": 15.6},
+    "skintokens": {"backend": "rig"},
+    "klein-4b": {"backend": "images"},
+    "z-image-turbo": {"backend": "images"},
+}
+
 
 
 _KEYS = {
     "listen": "listen", "port": "port", "store": "store", "gate": "gate",
-    "trellisModel": "trellis_model", "assistModel": "assist_model", "rigModel": "rig_model", "defaults": "defaults", "cutout": "cutout",
+    "trellisModel": "trellis_model", "assistModel": "assist_model", "rigModel": "rig_model", "paintModels": "paint_models", "defaults": "defaults", "cutout": "cutout",
     "rembgModel": "rembg_model", "requestTimeoutMinutes": "request_timeout_minutes",
 }
 

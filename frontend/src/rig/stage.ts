@@ -1,16 +1,27 @@
-// Die Bühne für ein GLB mit Skelett: Szene, Kamera, Proben (Gehen, Schlag, Arme heben, Kniebeuge) und Knochen von
+// Die Bühne für ein GLB mit Skelett: Szene, Kamera, Proben (Gehen, Schlag, Tritt, Arme heben, Kniebeuge, Umfallen)
+// und Knochen von
 // Hand. Dieselbe Logik wie der Rig-Prüfstand: die Proben drehen um die Achsen der Szene, nicht der Knochen, und
 // gehen von der Grundhaltung der Figur aus (T- oder A-Pose), die beim Laden gemessen wird.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-export type Clip = 'walk' | 'punch' | 'arms' | 'squat';
+export type Clip = 'walk' | 'punch' | 'kick' | 'arms' | 'squat' | 'fall';
+export type Track = { node: number; path: 'rotation' | 'translation'; values: number[] };
+export type Baked = { name: string; times: number[]; tracks: Track[] };
 export type Facts = { bones: number; meshes: number; vertices: number; core: { name: string; found: boolean }[] };
 
 // Mixamo-Namen, wie skintokens sie mit --class humanoid vergibt (mit oder ohne "mixamorig:").
 const CORE = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand',
   'RightShoulder', 'RightArm', 'RightForeArm', 'RightHand', 'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'RightUpLeg', 'RightLeg', 'RightFoot'];
+
+// 0 bis 1 weich, außerhalb festgehalten.
+const ease = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+
+// Eine Runde jeder Probe in Sekunden, für den Export als Schleife.
+export const PERIODS: Record<Clip, number> = {
+  walk: (2 * Math.PI) / 5, punch: (2 * Math.PI) / 4, kick: 1.8, arms: Math.PI, squat: (2 * Math.PI) / 2.4, fall: 4.5,
+};
 
 export class RigStage {
   private renderer: THREE.WebGLRenderer;
@@ -21,6 +32,12 @@ export class RigStage {
   private helper: THREE.SkeletonHelper | null = null;
   private meshes: THREE.SkinnedMesh[] = [];
   private rest = new Map<THREE.Bone, THREE.Quaternion>();
+  // Die Lage der ganzen Figur nach dem Einpassen; Umfallen kippt sie um die Fersen und stellt sie danach zurück.
+  private rootPosition = new THREE.Vector3();
+  private rootQuaternion = new THREE.Quaternion();
+  private heel = 0;
+  // Welcher Knoten des GLB zu welchem Knochen gehört, für den Export der Proben.
+  private nodes = new Map<THREE.Bone, number>();
   private armAngle: Record<string, number> = { LeftArm: Math.PI / 2, RightArm: -Math.PI / 2 };
   private clip: Clip | null = null;
   private started = 0;
@@ -85,6 +102,11 @@ export class RigStage {
       if ((object as THREE.SkinnedMesh).isSkinnedMesh) this.meshes.push(object as THREE.SkinnedMesh);
     });
     this.bones.forEach(bone => this.rest.set(bone, bone.quaternion.clone()));
+    this.nodes.clear();
+    this.bones.forEach(bone => {
+      const node = gltf.parser.associations.get(bone)?.nodes;
+      if (node !== undefined) this.nodes.set(bone, node);
+    });
     this.measureArms();
     this.helper = new THREE.SkeletonHelper(this.root);
     (this.helper.material as THREE.LineBasicMaterial).depthTest = false;
@@ -102,8 +124,13 @@ export class RigStage {
     const box = new THREE.Box3().setFromObject(object);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
-    object.position.sub(new THREE.Vector3(center.x, box.min.y, center.z));
-    object.scale.setScalar(1.8 / (Math.max(size.x, size.y, size.z) || 1));
+    // Erst skalieren, dann verschieben: so steht die Figur mit den Füßen auf dem Gitter, mittig, 1,8 hoch.
+    const scale = 1.8 / (Math.max(size.x, size.y, size.z) || 1);
+    object.scale.multiplyScalar(scale);
+    object.position.sub(new THREE.Vector3(center.x, box.min.y, center.z)).multiplyScalar(scale);
+    this.rootPosition.copy(object.position);
+    this.rootQuaternion.copy(object.quaternion);
+    this.heel = (box.min.z - center.z) * scale;
     this.controls.target.set(0, 0.9, 0);
     this.camera.position.set(1.6, 1.3, 3.2);
     this.controls.update();
@@ -128,7 +155,8 @@ export class RigStage {
     return (Math.sign(this.armAngle[arm]) || (arm === 'LeftArm' ? 1 : -1)) * angle - this.armAngle[arm];
   }
 
-  // Die Figur schaut nach +Z (so liefert TRELLIS.2 sie). X: vor/zurück, Y: um die Hochachse, Z: seitwärts.
+  // Die Figur schaut nach +Z (so liefert TRELLIS.2 sie). X: vor/zurück (positiv kippt nach vorn, was nach oben zeigt,
+  // und nach hinten, was nach unten hängt), Y: um die Hochachse, Z: seitwärts.
   private turn(name: string, x = 0, y = 0, z = 0) {
     const bone = this.find(name);
     if (!bone || !bone.parent) return;
@@ -154,6 +182,24 @@ export class RigStage {
       turn('Spine', 0, 0.35 * p); turn('Spine1', 0, 0.15 * p);
       turn('RightArm', 0, 1.5, toArm('RightArm', Math.PI / 2)); turn('RightForeArm', 0, 1.6 * (1 - p));
       turn('LeftArm', 0, -1.3, toArm('LeftArm', Math.PI / 2 - 0.2)); turn('LeftForeArm', 0, -1.7);
+    } else if (clip === 'kick') {
+      // Knie anziehen, Unterschenkel vorschnellen, zurück; das Standbein gibt etwas nach, die Arme halten Balance.
+      const c = (t % 1.8) / 1.8;
+      const up = ease(c / 0.3) * (1 - ease((c - 0.62) / 0.3));
+      const snap = ease((c - 0.3) / 0.1) * (1 - ease((c - 0.48) / 0.14));
+      turn('Spine', -0.25 * up);
+      turn('RightUpLeg', -1.45 * up); turn('RightLeg', 1.9 * up * (1 - snap)); turn('RightFoot', 0.5 * snap);
+      turn('LeftLeg', 0.2 * up); turn('LeftUpLeg', -0.1 * up);
+      turn('LeftArm', -0.5 * up, 0, toArm('LeftArm', 0.5 * up + 0.2)); turn('RightArm', 0.4 * up, 0, toArm('RightArm', 0.6 * up + 0.2));
+      turn('LeftForeArm', -0.9 * up); turn('RightForeArm', -0.5 * up);
+    } else if (clip === 'fall') {
+      // Nach hinten umfallen wie ein Brett: mit der Schwerkraft schneller werdend, liegen bleiben, wieder aufstehen.
+      const c = t % 4.5;
+      const f = c < 1 ? c * c : c < 3.2 ? 1 : 1 - ease((c - 3.2) / 1.1);
+      turn('Neck', 0.35 * f); turn('Spine', 0.15 * f);
+      turn('LeftArm', 0, 0, toArm('LeftArm', 0.2 + 1.1 * f)); turn('RightArm', 0, 0, toArm('RightArm', 0.2 + 1.1 * f));
+      turn('LeftUpLeg', -0.25 * f); turn('RightUpLeg', -0.1 * f); turn('LeftLeg', 0.35 * f); turn('RightLeg', 0.15 * f);
+      this.tilt(-(Math.PI / 2) * 0.93 * f);
     } else if (clip === 'arms') {
       const lift = 0.2 + ((1 - Math.cos(t * 2)) / 2) * 1.7;
       turn('LeftArm', 0, 0, toArm('LeftArm', lift)); turn('RightArm', 0, 0, toArm('RightArm', lift));
@@ -167,6 +213,57 @@ export class RigStage {
     }
   }
 
+  // Kippt die ganze Figur um die X-Achse durch die Fersen. Nach den Knochen, damit turn() noch die stehende Figur sah.
+  private tilt(angle: number) {
+    if (!this.root) return;
+    const turn = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), angle * this.amplitude);
+    const pivot = new THREE.Vector3(0, 0, this.heel);
+    this.root.quaternion.copy(turn).multiply(this.rootQuaternion);
+    this.root.position.copy(this.rootPosition).sub(pivot).applyQuaternion(turn).add(pivot);
+  }
+
+  // Die Proben als Keyframes (30 je Sekunde, eine Runde) in den Koordinaten des GLB, ohne das Einpassen auf der
+  // Bühne: Drehungen der Knochen, dazu für die obersten Knochen die Lage, weil Umfallen die ganze Figur bewegt.
+  bake(clips: [Clip, string][], fps = 30): Baked[] {
+    const playing = this.clip;
+    this.clip = null;
+    const top = this.bones.filter(bone => !(bone.parent as THREE.Bone | null)?.isBone && this.nodes.has(bone));
+    const baked = clips.map(([clip, name]) => {
+      const frames = Math.max(2, Math.round(PERIODS[clip] * fps));
+      const times = Array.from({ length: frames + 1 }, (_, i) => (i * PERIODS[clip]) / frames);
+      const rotations = new Map<THREE.Bone, number[]>();
+      const positions = new Map<THREE.Bone, number[]>();
+      for (const t of times) {
+        this.resetPose();
+        this.play(clip, t);
+        this.root!.updateMatrixWorld(true);
+        const world = new Map(top.map(bone => [bone, bone.matrixWorld.clone()]));
+        // Die Bühne zurück in ihre Lage, damit die Kippung beim Umfallen in den obersten Knochen landet.
+        this.root!.position.copy(this.rootPosition);
+        this.root!.quaternion.copy(this.rootQuaternion);
+        this.root!.updateMatrixWorld(true);
+        for (const bone of this.nodes.keys()) {
+          let q = bone.quaternion;
+          if (world.has(bone)) {
+            const local = bone.parent!.matrixWorld.clone().invert().multiply(world.get(bone)!);
+            const p = new THREE.Vector3(); q = new THREE.Quaternion();
+            local.decompose(p, q, new THREE.Vector3());
+            positions.set(bone, [...(positions.get(bone) ?? []), p.x, p.y, p.z]);
+          }
+          rotations.set(bone, [...(rotations.get(bone) ?? []), q.x, q.y, q.z, q.w]);
+        }
+      }
+      const tracks: Track[] = [];
+      const moves = (values: number[], size: number) => values.some((v, i) => Math.abs(v - values[i % size]) > 1e-5);
+      for (const [bone, values] of rotations) if (moves(values, 4)) tracks.push({ node: this.nodes.get(bone)!, path: 'rotation', values });
+      for (const [bone, values] of positions) if (moves(values, 3)) tracks.push({ node: this.nodes.get(bone)!, path: 'translation', values });
+      return { name, times, tracks };
+    });
+    this.resetPose();
+    this.clip = playing;
+    return baked;
+  }
+
   setClip(clip: Clip | null) {
     this.resetPose();
     this.clip = clip;
@@ -175,6 +272,8 @@ export class RigStage {
 
   resetPose() {
     this.bones.forEach(bone => bone.quaternion.copy(this.rest.get(bone)!));
+    this.root?.position.copy(this.rootPosition);
+    this.root?.quaternion.copy(this.rootQuaternion);
   }
 
   // Drehung eines Knochens um seine eigenen Achsen, in Grad, gegenüber der Grundhaltung.

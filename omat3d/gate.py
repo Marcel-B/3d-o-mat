@@ -1,5 +1,6 @@
 """Alles, was 3d-o-mat auf oi-o-mat rechnen lässt, geht durch die LLM-Schranke (scripts-Repo, docs/llm-gate.md):
-Gemma in LM Studio für Prompts und die Bildprüfung, TRELLIS.2 in MLX-Serve für die 3D-Umwandlung. Die Schranke
+Gemma in LM Studio für Prompts und die Bildprüfung, TRELLIS.2 in MLX-Serve für die 3D-Umwandlung, SkinTokens
+fürs Skelett und img-o-mat (FLUX.2 Klein, Z-Image Turbo) zum Malen. Die Schranke
 lässt Tonwerk vor, reiht nach Priorität ein, lädt und entlädt die Modelle. Diese App lädt nie selbst etwas.
 
 Regeln der Schranke: 403, 424 und 507 sind Einstellungsfehler (nicht wiederholen), 503 heißt Retry-After abwarten,
@@ -136,6 +137,48 @@ class Gate:
         if payload.get("format") != "glb" or not payload.get("data"):
             raise RuntimeError("Der Rig-Dienst lieferte kein GLB")
         return base64.b64decode(payload["data"]), payload.get("report") or {}
+
+    def paint(self, model: str, prompt: str, size: str = "1024x1024", seed: int | None = None, n: int = 1,
+              on_progress=None, on_image=None) -> int:
+        """POST /v1/images/generations mit stream (img-o-mat hinter der Schranke): Fortschritt an
+        on_progress(event, data) für queued und progress, jedes fertige Bild an on_image(jpeg, info). Zurück: Anzahl."""
+        body = {"model": model, "prompt": prompt, "size": size, "n": n, "stream": True}
+        if seed is not None:
+            body["seed"] = seed
+        count = 0
+        try:
+            with self._client() as client, client.stream("POST", "/v1/images/generations", json=body) as response:
+                if response.status_code >= 400:
+                    response.read()
+                    _check(response)
+                buffer = ""
+                for chunk in response.iter_text():
+                    buffer += chunk.replace("\r\n", "\n")
+                    while "\n\n" in buffer:
+                        block, buffer = buffer.split("\n\n", 1)
+                        name = next((line[6:].strip() for line in block.split("\n") if line.startswith("event:")), "")
+                        data = "".join(line[5:].strip() for line in block.split("\n") if line.startswith("data:"))
+                        if not name or not data:
+                            continue
+                        event = json.loads(data)
+                        if name == "image":
+                            count += 1
+                            if on_image:
+                                on_image(base64.b64decode(event["b64_json"]), event)
+                        elif name == "error":
+                            error = event.get("error") or {}
+                            code, message = error.get("code"), error.get("message") or "unbekannter Fehler"
+                            # 422: der Inhaltsfilter des Modells hielt das Bild zurück; das ändert nur ein anderer Prompt.
+                            raise RuntimeError(f"img-o-mat: {message}" if code != 422 else f"Vom Inhaltsfilter zurückgehalten: {message}")
+                        elif name == "done":
+                            return count
+                        elif on_progress:
+                            on_progress(name, event)
+        except httpx.TransportError as error:
+            raise StreamBroken(f"Verbindung abgerissen: {error}") from error
+        if count:
+            return count
+        raise StreamBroken("Die Antwort endete ohne Bild")
 
     def status(self) -> dict | None:
         """Der Zustand der Schranke (GET /gate/status), oder None, wenn sie nicht antwortet."""

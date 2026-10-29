@@ -1,17 +1,18 @@
 # 3d-o-mat
 
-Aus einem Bild ein 3D-Modell: Bild hochladen, freistellen lassen, optional von Gemma prüfen lassen, in 3D umwandeln, drehbar ansehen, als GLB herunterladen. Ohne Bild hilft Gemma mit Bild-Prompts aus einer Idee. Die Bilder daraus erzeugt später der Bilddienst img-o-mat.
+Aus einem Bild ein 3D-Modell: Bild hochladen, freistellen lassen, optional von Gemma prüfen lassen, in 3D umwandeln, drehbar ansehen, als GLB herunterladen. Ohne Bild schreibt Gemma aus einer Idee Bild-Prompts, und img-o-mat malt sie.
 
 | Teil | Wo | Was |
 | --- | --- | --- |
 | Website und API | Proxmox-LXC mit Docker | Python (FastAPI) mit React-Oberfläche, Port 8090; Freistellen mit rembg auf der CPU; hält keine Daten |
-| Rechnen | oi-o-mat, nur über die [LLM-Schranke](https://github.com/Marcel-B/scripts/blob/main/docs/llm-gate.md) | TRELLIS.2 in MLX-Serve (Bild zu 3D), SkinTokens im Rig-Dienst (Skelett einsetzen), Gemma 4 26B in LM Studio (Prüfen, Prompts) |
+| Rechnen | oi-o-mat, nur über die [LLM-Schranke](https://github.com/Marcel-B/scripts/blob/main/docs/llm-gate.md) | TRELLIS.2 in MLX-Serve (Bild zu 3D), SkinTokens im Rig-Dienst (Skelett einsetzen), Gemma 4 26B in LM Studio (Prüfen, Prompts), img-o-mat mit FLUX.2 Klein 4B oder Z-Image Turbo (Bilder malen) |
 | Dateien | T7 an oi-o-mat, `/Volumes/T7/3d-o-mat`, per SSH | Original, Freistellung, Aufträge, GLB |
 
 ```
 Browser ──► 3d-o-mat (Proxmox, :8090) ──ssh──► oi-o-mat: store/launch.py ──► /Volumes/T7/3d-o-mat
                      │
-                     └──► LLM-Schranke (oi-o-mat:1235) ──► MLX-Serve (TRELLIS.2), LM Studio (Gemma)
+                     └──► LLM-Schranke (oi-o-mat:1235) ──► MLX-Serve (TRELLIS.2), LM Studio (Gemma), Rig-Dienst (SkinTokens),
+                                                      img-o-mat (malt auf oi-o-mat)
 ```
 
 Die Website erreicht die T7 wie img-o-mat seinen Maler: per SSH, mit einem eigenen Schlüssel, der auf oi-o-mat nur `store/launch.py` starten darf. Das Skript kennt fünf Wörter (`check`, `put`, `get`, `list`, `delete`) und nur Pfade der Form `images|jobs/<id>/<name>`. Dafür läuft auf oi-o-mat kein Dienst und ist kein Port offen. Die Liste der Bilder und Aufträge hält die Website im Speicher und liest sie beim Start von der T7.
@@ -26,6 +27,7 @@ Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schran
    - Ohne rembg wird nur ein einfarbiger Hintergrund entfernt.
 
    Danach wird das Bild quadratisch auf das Objekt zugeschnitten. TRELLIS.2 braucht so ein freigestelltes Bild, weil es selbst keinen Hintergrund entfernt.
+   Kein Bild zur Hand? Unter „Malen lassen“ eine Idee eingeben: „Prompts schreiben“ lässt Gemma daraus englische Prompts für eine gute Vorlage machen (ein Objekt, ganz im Bild, schlichter Hintergrund), „malen“ schickt einen davon an img-o-mat, „Direkt malen“ den eingegebenen Text. Gemalt wird über die Schranke auf oi-o-mat mit FLUX.2 Klein 4B oder Z-Image Turbo (beide Apache 2.0, ohne Inhaltsfilter), 1 bis 4 Bilder. Jedes fertige Bild wird wie ein hochgeladenes freigestellt und steht dann in der Bildliste, mit Modell, Seed und Prompt. Das Original behält img-o-mats XMP-Vermerk, dass es KI-generiert ist.
 2. **Prüfen (optional):** „Mit Gemma prüfen“ beantwortet: ein einzelnes Objekt, vollständig, scharf, ohne Glas? Dazu kommen Tipps.
 3. **Umwandeln:** „In 3D umwandeln“ legt einen Auftrag an. Aufträge laufen nacheinander und gehen gestreamt an `/v1/3d/generations` der Schranke. Den Fortschritt zeigt die Liste.
    - Wartet der Auftrag bei der Schranke, steht ihr Grund dabei, zum Beispiel „Tonwerk arbeitet (songs)“.
@@ -35,7 +37,8 @@ Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schran
 
 5. **Skelett einsetzen (optional):** Unter einem fertigen Modell setzt „Skelett einsetzen“ Knochen und Gewichte ein. Dafür läuft SkinTokens auf oi-o-mat, etwa 35 Sekunden und höchstens 8 GB. Das Ergebnis ist ein eigener Auftrag.
    - Bei „Mensch“ tragen die Knochen Mixamo-Namen. Animationen von Mixamo (Without Skin) passen dann direkt, etwa in Godot oder Unity.
-   - Der Viewer zeigt die Figur mit Proben (Gehen, Schlag, Arme heben, Kniebeuge), Schiebern für einzelne Knochen und dem Befund, welche Mixamo-Knochen gefunden wurden.
+   - Der Viewer zeigt die Figur mit Proben (Gehen, Schlag, Tritt, Arme heben, Kniebeuge, Umfallen), Schiebern für einzelne Knochen und dem Befund, welche Mixamo-Knochen gefunden wurden.
+   - „GLB mit Proben herunterladen“ hängt die sechs Proben als glTF-Animationen an das GLB (30 Bilder je Sekunde, eine Runde je Probe, mit der eingestellten Stärke). In Godot erscheinen sie im `AnimationPlayer` als „Gehen“, „Tritt“, „Umfallen“ usw., in Blender als Aktionen. Netz, Texturen und Skelett bleiben unverändert; nur bewegte Knoten, die als Matrix gespeichert sind, werden in Lage, Drehung und Größe zerlegt, weil glTF das für Animationen verlangt. Die Proben sind Prüfbewegungen; für ein Spiel passen Mixamo-Animationen über Godots Retargeting besser.
 
 Ist die T7 nicht da (keine Datei `.3d-o-mat` im Ordner) oder oi-o-mat nicht erreichbar, nimmt die Website nichts an und zeigt „T7 nicht erreichbar“. So landet nie etwas auf der internen Platte von oi-o-mat.
 
@@ -109,7 +112,7 @@ Gemessen auf oi-o-mat (M6, 32 GB) mit einer TRELLIS-Figur (226.000 Punkte): 34,5
 
 ### 5. Freigeben
 
-Beim ersten Start meldet sich die App bei der Schranke an. In `http://192.168.2.122:1235/gate` dann bei **3d-o-mat** TRELLIS.2 und SkinTokens freigeben, Gemma ebenfalls freigeben oder installieren. Danach ist die Website unter `http://<container>:8090` erreichbar. Beim Start lädt die App das rembg-Modell (etwa 170 MB) einmal in das Volume `rembg-cache`.
+Beim ersten Start meldet sich die App bei der Schranke an. In `http://192.168.2.122:1235/gate` dann bei **3d-o-mat** TRELLIS.2, SkinTokens und die Bildmodelle (`klein-4b`, `z-image-turbo`) freigeben, Gemma ebenfalls freigeben oder installieren. Danach ist die Website unter `http://<container>:8090` erreichbar. Beim Start lädt die App das rembg-Modell (etwa 170 MB) einmal in das Volume `rembg-cache`.
 
 ### Statt Proxmox: auf einem Mac
 
@@ -129,6 +132,7 @@ cp config.example.json config.json
 | `store` | `{"ssh": "marcel@192.168.2.122", "key": "/ssh/id_ed25519", "knownHosts": "/ssh/known_hosts"}` für die T7 von oi-o-mat, oder `{"folder": "…"}` für einen eigenen Ordner |
 | `gate` | Anmeldung bei der Schranke: `url`, `app`, `note`, `priority`, `holdFor`, `models` (siehe docs/llm-gate.md im scripts-Repo) |
 | `trellisModel`, `rigModel`, `assistModel` | welche der angemeldeten Modelle für 3D, fürs Skelett und für Gemma |
+| `paintModels` | die Bildmodelle von img-o-mat zur Auswahl, das erste ist die Vorgabe (`klein-4b`, `z-image-turbo`). Fehlt eines dieser Modelle in `gate.models`, meldet die App es trotzdem an; so reicht bei einer älteren `config.json` ein Update |
 | `defaults` | Vorgaben für `/v1/3d/generations`: `texture_size`, `decimation_target`, auch `resolution`, `steps` |
 | `cutout` | `auto`, `rembg`, `flood` oder `none` |
 | `rembgModel` | Vorgabe `isnet-general-use`: auf einem 12-MP-Foto 9 s und 1,5 GB RAM. `birefnet-general` stellt etwas feiner frei, braucht aber 115 s und 9,5 GB, mehr als der Container hat |
@@ -141,9 +145,8 @@ cp config.example.json config.json
 cd frontend && npm run dev
 ```
 
-`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, unzulässige Pfade. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
+`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, unzulässige Pfade. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
 
 ## Später
 
-- **Bilder erzeugen:** über img-o-mat (FLUX, Krea 2, Z-Image-Turbo), den auch Tonwerk nutzt. Dann führt der Prompt-Teil direkt zu Bildern zur Auswahl.
 - Pixal3D für mehrere Ansichten desselben Objekts (MLX-Serve kann es, `images` statt `image`).
