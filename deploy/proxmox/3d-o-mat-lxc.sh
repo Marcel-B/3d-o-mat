@@ -172,11 +172,16 @@ schluessel() {
 app() {
     info "Schritt 2: 3d-o-mat in Container $CTID"
     if im_ct test -d "$APP_DIR/.git"; then
-        im_ct git -C "$APP_DIR" pull -q --ff-only
+        # Auch auf den Zweig, den REPO_BRANCH nennt, wenn der Checkout auf einem anderen steht.
+        im_ct git -C "$APP_DIR" fetch -q origin "$REPO_BRANCH"
+        im_ct git -C "$APP_DIR" checkout -q -B "$REPO_BRANCH" FETCH_HEAD
     else
         im_ct git clone -q --branch "$REPO_BRANCH" "$REPO_URL" "$APP_DIR"
     fi
-    ok "Stand $(im_ct git -C "$APP_DIR" log -1 --format='%h %s')"
+    ok "Stand $(im_ct git -C "$APP_DIR" log -1 --format='%h %s') ($REPO_BRANCH)"
+    if ! im_ct test -f "$APP_DIR/store/launch.py"; then
+        abbruch "Dieser Stand kennt die Ablage per SSH noch nicht; REPO_BRANCH=proxmox-skript setzen, bis sie auf main ist."
+    fi
     if ! im_ct test -f "$APP_DIR/config.json"; then
         frage OI_HOST "Adresse von oi-o-mat im Heimnetz"
         frage OI_USER "Benutzer auf oi-o-mat"
@@ -189,7 +194,9 @@ app() {
 import json, sys
 config = json.load(sys.stdin)
 config["gate"]["url"] = sys.argv[1]
-config["store"]["ssh"] = sys.argv[2]
+config.pop("dataDir", None)
+config.pop("mountCommand", None)
+config["store"] = {"ssh": sys.argv[2], "key": "/ssh/id_ed25519", "knownHosts": "/ssh/known_hosts"}
 print(json.dumps(config, indent=2, ensure_ascii=False))' "$GATE_URL" "$OI_USER@$OI_HOST" >"$datei"
         pct push "$CTID" "$datei" "$APP_DIR/config.json"
         rm -f "$datei"
@@ -210,8 +217,9 @@ print(json.dumps(config, indent=2, ensure_ascii=False))' "$GATE_URL" "$OI_USER@$
 
 update() {
     info "Aktualisiere 3d-o-mat in Container $CTID"
-    im_ct git -C "$APP_DIR" pull -q --ff-only
-    ok "Stand $(im_ct git -C "$APP_DIR" log -1 --format='%h %s')"
+    im_ct git -C "$APP_DIR" fetch -q origin "$REPO_BRANCH"
+    im_ct git -C "$APP_DIR" checkout -q -B "$REPO_BRANCH" FETCH_HEAD
+    ok "Stand $(im_ct git -C "$APP_DIR" log -1 --format='%h %s') ($REPO_BRANCH)"
     im_ct bash -c "cd '$APP_DIR' && docker compose up -d --build --remove-orphans && docker image prune -f" >/dev/null
     pruefen
 }
