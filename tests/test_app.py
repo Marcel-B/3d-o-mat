@@ -66,7 +66,7 @@ class FakeGate:
         if request.url.path == "/v1/images/generations":
             assert request.headers["authorization"] == "Bearer 3d-o-mat"
             body = json.loads(request.content)
-            assert body["stream"] is True and body["model"] in ("klein-4b", "z-image-turbo") and body["size"] == "1024x1024"
+            assert body["stream"] is True and body["model"] in ("klein-4b", "z-image-turbo", "krea-2-turbo") and body["size"] == "1024x1024"
             if "forbidden" in body["prompt"]:
                 return paint_stream(("error", {"error": {"message": "nsfw", "type": "img_o_mat", "code": 422}}))
             jpeg = io.BytesIO()
@@ -284,6 +284,7 @@ def test_paint_puts_pictures_into_the_list(make):
     with make([])[0] as client:
         assert client.post("/api/paint", json={"prompt": "a red disc", "model": "midjourney"}).status_code == 422
         assert client.post("/api/paint", json={"prompt": "a red disc", "size": "17x17"}).status_code == 422
+        assert client.post("/api/paint", json={"prompt": "a red disc", "model": "krea-2-turbo"}).status_code == 200
         painting = client.post("/api/paint", json={"prompt": "a red disc", "n": 2}).json()
         assert painting["model"] == "klein-4b" and painting["state"] == "running"
         painting = wait_for_painting(client, painting["id"])
@@ -307,5 +308,6 @@ def test_gate_models_add_what_an_old_config_lacks():
     models = {entry["model"]: entry for entry in config.gate_models()}
     assert models["gemma-4-26b-a4b-it-qat-mlx"]["context"] == 4096
     assert models["klein-4b"]["backend"] == "images" and models["skintokens"]["backend"] == "rig"
+    assert models["krea-2-turbo"]["backend"] == "images"
     assert models["ddalcu/TRELLIS.2-4B-MLX-Serve-8bit"]["ramGb"] == 12
     assert len(config.gate_models()) == len(models)

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type Painting, type Prompts, type Status } from '../api';
 
-const labels: Record<string, string> = { 'klein-4b': 'FLUX.2 Klein 4B', 'z-image-turbo': 'Z-Image Turbo' };
+const labels: Record<string, string> = { 'klein-4b': 'FLUX.2 Klein 4B', 'z-image-turbo': 'Z-Image Turbo', 'krea-2-turbo': 'Krea 2 Turbo' };
 const stages: Record<string, string> = {
   queued: 'wartet', sending: 'schickt', loading: 'lädt das Modell', painting: 'malt', checking: 'prüft', cutout: 'stellt frei',
 };

@@ -36,6 +36,10 @@
       {
         "model": "z-image-turbo",
         "backend": "images"
+      },
+      {
+        "model": "krea-2-turbo",
+        "backend": "images"
       }
     ]
   },
@@ -44,7 +48,8 @@
   "rigModel": "skintokens",
   "paintModels": [
     "klein-4b",
-    "z-image-turbo"
+    "z-image-turbo",
+    "krea-2-turbo"
   ],
   "defaults": {
     "texture_size": 2048,
