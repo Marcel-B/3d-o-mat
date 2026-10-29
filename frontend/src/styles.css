@@ -112,6 +112,8 @@ textarea { resize: vertical; }
 .jobs img { width: 44px; height: 44px; object-fit: contain; flex: 0 0 44px; }
 .jobs .actions { flex: 0 0 auto; }
 .jobs strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14rem; }
-.progress { position: relative; height: 18px; margin-top: 6px; border-radius: 9px; background: var(--stage); overflow: hidden; }
-.progress div { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--accent) 45%, transparent); transition: width .4s; }
-.progress span { position: relative; font-size: .75rem; padding-left: 8px; line-height: 18px; }
+/* Flex statt Zeilenhöhe: so sitzt der Text unabhängig von der Schrift mittig im Balken. */
+.progress { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 22px; margin-top: 6px; padding: 0 10px; border-radius: 11px; background: var(--stage); overflow: hidden; font-size: .78rem; line-height: 1; }
+.progress .bar { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--accent) 40%, transparent); transition: width .4s; }
+.progress span { position: relative; white-space: nowrap; }
+.progress .count { font-variant-numeric: tabular-nums; color: var(--muted); }
