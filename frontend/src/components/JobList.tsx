@@ -16,6 +16,7 @@ const stages: [RegExp, string][] = [
   [/shape|geometry|mesh/, 'Form'],
   [/tex|paint|material|bake/, 'Textur'],
   [/decimat|simplif|export|glb/, 'Abschluss'],
+  [/skeleton/, 'Skelett und Gewichte'],
 ];
 function stageLabel(stage: string | null) {
   if (!stage) return '';
@@ -56,6 +57,7 @@ export function JobList({ jobs, selected, onSelect, onChanged }: Props) {
             <div className="grow">
               <div className="row tight">
                 <strong>{job.imageName ?? job.imageId}</strong>
+                {job.kind === 'rig' && <span className="pill muted">Skelett</span>}
                 <span className={`pill ${tones[job.state]}`}>{states[job.state]}</span>
                 <span className="muted small">{duration(job)}</span>
               </div>

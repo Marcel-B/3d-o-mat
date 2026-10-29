@@ -5,7 +5,7 @@ Aus einem Bild ein 3D-Modell: Bild hochladen, freistellen lassen, optional von G
 | Teil | Wo | Was |
 | --- | --- | --- |
 | Website und API | Proxmox-LXC mit Docker | Python (FastAPI) mit React-Oberfläche, Port 8090; Freistellen mit rembg auf der CPU; hält keine Daten |
-| Rechnen | oi-o-mat, nur über die [LLM-Schranke](https://github.com/Marcel-B/scripts/blob/main/docs/llm-gate.md) | TRELLIS.2 in MLX-Serve (Bild zu 3D), Gemma 4 26B in LM Studio (Prüfen, Prompts) |
+| Rechnen | oi-o-mat, nur über die [LLM-Schranke](https://github.com/Marcel-B/scripts/blob/main/docs/llm-gate.md) | TRELLIS.2 in MLX-Serve (Bild zu 3D), SkinTokens im Rig-Dienst (Skelett einsetzen), Gemma 4 26B in LM Studio (Prüfen, Prompts) |
 | Dateien | T7 an oi-o-mat, `/Volumes/T7/3d-o-mat`, per SSH | Original, Freistellung, Aufträge, GLB |
 
 ```
@@ -32,6 +32,10 @@ Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schran
    - 503 wird nach `Retry-After` wiederholt, ein abgerissener Stream bis zu dreimal.
    - 403 und 424 bedeuten, dass das Modell in `/gate` noch freigegeben werden muss.
 4. **Ergebnis:** Das GLB mit PBR-Texturen liegt auf der T7. Die Seite zeigt es mit `<model-viewer>`, und es lässt sich herunterladen.
+
+5. **Skelett einsetzen (optional):** Unter einem fertigen Modell setzt „Skelett einsetzen“ Knochen und Gewichte ein. Dafür läuft SkinTokens auf oi-o-mat, etwa 35 Sekunden und höchstens 8 GB. Das Ergebnis ist ein eigener Auftrag.
+   - Bei „Mensch“ tragen die Knochen Mixamo-Namen. Animationen von Mixamo (Without Skin) passen dann direkt, etwa in Godot oder Unity.
+   - Der Viewer zeigt die Figur mit Proben (Gehen, Schlag, Arme heben, Kniebeuge), Schiebern für einzelne Knochen und dem Befund, welche Mixamo-Knochen gefunden wurden.
 
 Ist die T7 nicht da (keine Datei `.3d-o-mat` im Ordner) oder oi-o-mat nicht erreichbar, nimmt die Website nichts an und zeigt „T7 nicht erreichbar“. So landet nie etwas auf der internen Platte von oi-o-mat.
 
@@ -81,9 +85,30 @@ Die zweite Zeile funktioniert nur, wenn MLX-Serve läuft. Sie zeigt den Namen, u
 
 TRELLIS.2 braucht beim Rechnen mehr Speicher als im Leerlauf. Auf oi-o-mat (M6, 32 GB) zeigte die GPU beim ersten Lauf (Auflösung 1024, Textur 2048) höchstens etwa 9 GB, danach 7 GB, bis die Schranke es entlud. Die Vorlage meldet deshalb `ramGb: 12` an, mit Puffer für die Textur-Stufe.
 
-### 4. Freigeben
+### 4. oi-o-mat: Rig-Dienst (Skelett einsetzen)
 
-Beim ersten Start meldet sich die App bei der Schranke an. In `http://192.168.2.122:1235/gate` dann bei **3d-o-mat** TRELLIS.2 freigeben, Gemma ebenfalls freigeben oder installieren. Danach ist die Website unter `http://<container>:8090` erreichbar. Beim Start lädt die App das rembg-Modell (etwa 170 MB) einmal in das Volume `rembg-cache`.
+Rust muss da sein (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y`). Dann im Checkout von 3d-o-mat:
+
+```sh
+./install-rig.sh
+```
+
+Das Skript erledigt:
+- Es baut die Apple-Silicon-Fassung von SkinTokens ([chris-straka/skintokens](https://github.com/chris-straka/skintokens), Rust mit Metal) unter `/Volumes/T7/skintokens`, falls sie dort noch nicht liegt.
+- Es lädt die offiziellen Gewichte (1,1 GB, mit Prüfsumme).
+- Es kopiert `rig/server.py` nach `~/Library/Application Support/3d-o-mat` und trägt den Dienst bei der Schranke als Server `rig` vom Typ `tool` ein. Die Schranke startet ihn bei der ersten Anfrage.
+- Danach in `/gate` bei 3d-o-mat das Modell `skintokens` freigeben.
+
+**Lizenzen:**
+- Code und Gewichte von SkinTokens stehen unter MIT, das eingebaute Qwen3-0.6B unter Apache-2.0.
+- Das gebaute `skintokens`-Programm ist GPL-3.0, weil sein Teil zum Einlesen der Form aus Michelangelo stammt. 3d-o-mat ruft es nur als eigenes Programm auf und bleibt MIT.
+- Die erzeugten Skelette und Gewichte sind Ausgaben des Modells und kein GPL-Code.
+
+Gemessen auf oi-o-mat (M6, 32 GB) mit einer TRELLIS-Figur (226.000 Punkte): 34,5 s, höchstens 8,3 GB.
+
+### 5. Freigeben
+
+Beim ersten Start meldet sich die App bei der Schranke an. In `http://192.168.2.122:1235/gate` dann bei **3d-o-mat** TRELLIS.2 und SkinTokens freigeben, Gemma ebenfalls freigeben oder installieren. Danach ist die Website unter `http://<container>:8090` erreichbar. Beim Start lädt die App das rembg-Modell (etwa 170 MB) einmal in das Volume `rembg-cache`.
 
 ### Statt Proxmox: auf einem Mac
 
@@ -102,7 +127,7 @@ cp config.example.json config.json
 | --- | --- |
 | `store` | `{"ssh": "marcel@192.168.2.122", "key": "/ssh/id_ed25519", "knownHosts": "/ssh/known_hosts"}` für die T7 von oi-o-mat, oder `{"folder": "…"}` für einen eigenen Ordner |
 | `gate` | Anmeldung bei der Schranke: `url`, `app`, `note`, `priority`, `holdFor`, `models` (siehe docs/llm-gate.md im scripts-Repo) |
-| `trellisModel`, `assistModel` | welche der angemeldeten Modelle für 3D und für Gemma |
+| `trellisModel`, `rigModel`, `assistModel` | welche der angemeldeten Modelle für 3D, fürs Skelett und für Gemma |
 | `defaults` | Vorgaben für `/v1/3d/generations`: `texture_size`, `decimation_target`, auch `resolution`, `steps` |
 | `cutout` | `auto`, `rembg`, `flood` oder `none` |
 | `rembgModel` | Vorgabe `isnet-general-use`: auf einem 12-MP-Foto 9 s und 1,5 GB RAM. `birefnet-general` stellt etwas feiner frei, braucht aber 115 s und 9,5 GB, mehr als der Container hat |

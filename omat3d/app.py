@@ -38,6 +38,12 @@ class JobRequest(BaseModel):
     options: Options = Options()
 
 
+class RigRequest(BaseModel):
+    """Skelett einsetzen: humanoid bekommt Mixamo-Knochennamen, die anderen bleiben bone_N."""
+    kind: str = Field("humanoid", alias="class")
+    seed: int = Field(1, ge=0, le=2**31 - 1)
+
+
 class PromptRequest(BaseModel):
     idea: str = Field(..., min_length=1, max_length=1000)
 
@@ -52,7 +58,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
                log=print) -> FastAPI:
     store = store or make_store(config, log)
     gate = gate or Gate(config.gate_url, config.app_name, config.request_timeout_minutes)
-    jobs = Jobs(store, gate, config.trellis_model, config.defaults, log)
+    jobs = Jobs(store, gate, config.trellis_model, config.defaults, log, rig_model=config.rig_model)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -124,7 +130,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
                         "freeGb": storage.get("freeGb"), "error": storage.get("error")},
             "rembg": cutout.rembg_available(),
             "cutout": config.cutout,
-            "models": {"trellis": config.trellis_model, "assist": config.assist_model},
+            "models": {"trellis": config.trellis_model, "assist": config.assist_model, "rig": config.rig_model},
             "defaults": config.defaults,
             "gate": {
                 "url": config.gate_url,
@@ -216,6 +222,17 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
     def get_job(job_id: str):
         return job(job_id)
 
+    @app.post("/api/jobs/{job_id}/rig")
+    def rig_job(job_id: str, request: RigRequest = RigRequest()):
+        source = job(job_id)
+        if source.get("kind") == "rig":
+            raise HTTPException(409, "Dieses Modell hat schon ein Skelett")
+        if source["state"] != "done":
+            raise HTTPException(409, "Erst wenn das 3D-Modell fertig ist")
+        if request.kind not in ("humanoid", "quadruped", "custom"):
+            raise HTTPException(422, "class: humanoid, quadruped oder custom")
+        return jobs.create_rig(source, request.kind, request.seed)
+
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str):
         job(job_id)
@@ -237,7 +254,8 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         if doc["state"] != "done":
             raise HTTPException(404, "Noch kein Modell")
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
-        return file("jobs", job_id, "model.glb", "model/gltf-binary", f"{name}-{job_id}.glb" if download else None)
+        suffix = "-skelett" if doc.get("kind") == "rig" else ""
+        return file("jobs", job_id, "model.glb", "model/gltf-binary", f"{name}{suffix}-{job_id}.glb" if download else None)
 
     if FRONTEND.is_dir():
         app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")

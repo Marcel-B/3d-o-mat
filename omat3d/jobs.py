@@ -1,4 +1,4 @@
-"""Die Aufträge: Bild zu 3D, einer nach dem anderen (TRELLIS.2 braucht oi-o-mat ohnehin ganz). Jeder Auftrag liegt als
+"""Die Aufträge: Bild zu 3D und Skelett einsetzen (kind "rig", aus dem GLB eines fertigen 3D-Auftrags), einer nach dem anderen (TRELLIS.2 braucht oi-o-mat ohnehin ganz). Jeder Auftrag liegt als
 job.json auf der T7 (über store.py); nach einem Neustart der App werden unterbrochene Aufträge neu eingereiht.
 """
 import threading
@@ -19,10 +19,11 @@ def now() -> str:
 
 
 class Jobs:
-    def __init__(self, store: Store, gate: Gate, model: str, defaults: dict, log=print):
+    def __init__(self, store: Store, gate: Gate, model: str, defaults: dict, log=print, rig_model: str = "skintokens"):
         self.store = store
         self.gate = gate
         self.model = model
+        self.rig_model = rig_model
         self.defaults = defaults
         self.log = log
         self.lock = threading.Lock()
@@ -56,6 +57,20 @@ class Jobs:
         job = {
             "id": job_id, "imageId": image["id"], "imageName": image.get("name"), "options": options,
             "state": "queued", "stage": None, "step": None, "total": None, "message": None,
+            "created": now(), "started": None, "finished": None, "seconds": None, "glbBytes": None, "attempts": 0,
+        }
+        self.save(job)
+        self.wake.set()
+        return job
+
+    def create_rig(self, source: dict, kind: str, seed: int) -> dict:
+        """Ein Skelett für das GLB eines fertigen 3D-Auftrags; das Ergebnis ist wieder model.glb, im eigenen Auftrag."""
+        self.store.ensure_mounted()
+        job_id = new_id()
+        job = {
+            "id": job_id, "kind": "rig", "sourceJobId": source["id"], "imageId": source["imageId"],
+            "imageName": source.get("imageName"), "options": {"class": kind, "seed": seed},
+            "state": "queued", "stage": None, "step": None, "total": None, "message": None, "report": None,
             "created": now(), "started": None, "finished": None, "seconds": None, "glbBytes": None, "attempts": 0,
         }
         self.save(job)
@@ -110,12 +125,24 @@ class Jobs:
         started = time.monotonic()
         broken = busy = 0
         try:
-            png = self.store.get("images", job["imageId"], "cutout.png")
-            options = {**self.defaults, **job["options"]}
+            report = None
+            if job.get("kind") == "rig":
+                source = self.store.get("jobs", job["sourceJobId"], "model.glb")
+
+                def work():
+                    self.update(job_id, state="running", stage="skeleton", message="SkinTokens setzt das Skelett ein")
+                    return self.gate.rig(self.rig_model, source, job["options"].get("class", "humanoid"),
+                                         job["options"].get("seed", 1))
+            else:
+                png = self.store.get("images", job["imageId"], "cutout.png")
+                options = {**self.defaults, **job["options"]}
+
+                def work():
+                    return self.gate.generate_3d(self.model, png, options, on_progress=lambda *p: self.progress(job_id, *p)), None
             while True:
                 self.update(job_id, attempts=job["attempts"] + broken + busy + 1)
                 try:
-                    glb = self.gate.generate_3d(self.model, png, options, on_progress=lambda *p: self.progress(job_id, *p))
+                    glb, report = work()
                     break
                 except StreamBroken as error:
                     broken += 1
@@ -132,7 +159,8 @@ class Jobs:
             # launch.py schreibt daneben und benennt dann um: nie ein halbes GLB auf der T7.
             self.store.put("jobs", job_id, "model.glb", glb)
             seconds = round(time.monotonic() - started)
-            self.update(job_id, state="done", finished=now(), seconds=seconds, glbBytes=len(glb), message=None, stage=None)
+            self.update(job_id, state="done", finished=now(), seconds=seconds, glbBytes=len(glb), message=None, stage=None,
+                        **({"report": report} if report is not None else {}))
             self.log(f"{job_id}: fertig in {seconds} s, {len(glb) // 1024} KB")
         except GateRefused as error:
             hint = " Freigeben oder installieren in der Oberfläche der Schranke (/gate)." if error.status in (403, 424) else ""

@@ -20,6 +20,9 @@ export type Options = {
 
 export type Job = {
   id: string;
+  kind?: 'rig';
+  sourceJobId?: string;
+  report?: { joints_raw?: number; naming?: string; weights?: { verts?: number } } | null;
   imageId: string;
   imageName: string | null;
   options: Options;
@@ -40,7 +43,7 @@ export type Status = {
   storage: { where: string; mounted: boolean; root: string | null; freeGb: number | null; error: string | null };
   rembg: boolean;
   cutout: string;
-  models: { trellis: string; assist: string };
+  models: { trellis: string; assist: string; rig: string };
   defaults: Options;
   gate: {
     url: string;
@@ -83,6 +86,7 @@ export const api = {
   prompts: (idea: string) => call<Prompts>('POST', '/api/prompts', { idea }),
   jobs: () => call<Job[]>('GET', '/api/jobs'),
   createJob: (imageId: string, options: Options) => call<Job>('POST', '/api/jobs', { imageId, options }),
+  rigJob: (id: string, kind: string) => call<Job>('POST', `/api/jobs/${id}/rig`, { class: kind }),
   cancelJob: (id: string) => call<Job>('POST', `/api/jobs/${id}/cancel`),
   deleteJob: (id: string) => call('DELETE', `/api/jobs/${id}`),
 };

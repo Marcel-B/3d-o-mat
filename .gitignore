@@ -7,3 +7,4 @@ frontend/dist/
 config.json
 data/
 .DS_Store
+*.tsbuildinfo

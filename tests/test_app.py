@@ -197,3 +197,51 @@ def test_files_land_on_the_drive(make, tmp_path):
         assert (tmp_path / "images" / image["id"] / "cutout.png").is_file()
         assert (tmp_path / "jobs" / job["id"] / "model.glb").read_bytes() == GLB
         assert json.loads((tmp_path / "jobs" / job["id"] / "job.json").read_text())["state"] == "done"
+
+
+class RigGate(FakeGate):
+    """Wie FakeGate, dazu POST /v1/rig wie der Rig-Dienst; rig_status steuert die Antwort."""
+
+    rig_status = 200
+
+    def __call__(self, request):
+        if request.url.path == "/v1/rig":
+            body = json.loads(request.content)
+            assert body["model"] == "skintokens" and body["class"] == "humanoid"
+            assert base64.b64decode(body["glb"]) == GLB
+            if self.rig_status != 200:
+                return httpx.Response(self.rig_status, json={"error": {"message": "skintokens: kein Mensch erkannt"}})
+            return httpx.Response(200, json={"format": "glb", "data": base64.b64encode(GLB + b"rig").decode(),
+                                              "report": {"joints_raw": 40, "naming": "mixamo (structural)"}})
+        return super().__call__(request)
+
+
+def make_rig_client(tmp_path, status=200):
+    (tmp_path / MARKER).write_text("")
+    fake = RigGate([done_stream()])
+    fake.rig_status = status
+    config = Config(trellis_model="trellis", assist_model="gemma", defaults={"texture_size": 1024}, cutout="flood")
+    store = Store(folder=str(tmp_path), log=lambda *_: None)
+    gate = Gate("http://gate", "3d-o-mat", transport=httpx.MockTransport(fake))
+    app = create_app(config, gate=gate, store=store, register=False, log=lambda *_: None)
+    return TestClient(app)
+
+
+def test_rig_a_finished_model(tmp_path):
+    with make_rig_client(tmp_path) as client:
+        model = wait_for(client, client.post("/api/jobs", json={"imageId": upload(client)["id"]}).json()["id"])
+        assert client.post(f"/api/jobs/{model['id']}/rig", json={"class": "giraffe"}).status_code == 422
+        rig = client.post(f"/api/jobs/{model['id']}/rig", json={"class": "humanoid"}).json()
+        assert rig["kind"] == "rig" and rig["sourceJobId"] == model["id"]
+        rig = wait_for(client, rig["id"])
+        assert rig["state"] == "done" and rig["report"]["joints_raw"] == 40
+        download = client.get(f"/api/jobs/{rig['id']}/model.glb?download=true")
+        assert download.content == GLB + b"rig" and "-skelett-" in download.headers["content-disposition"]
+        assert client.post(f"/api/jobs/{rig['id']}/rig", json={}).status_code == 409
+
+
+def test_rig_failure_is_reported(tmp_path):
+    with make_rig_client(tmp_path, status=422) as client:
+        model = wait_for(client, client.post("/api/jobs", json={"imageId": upload(client)["id"]}).json()["id"])
+        rig = wait_for(client, client.post(f"/api/jobs/{model['id']}/rig", json={}).json()["id"])
+        assert rig["state"] == "failed" and "kein Mensch" in rig["message"]

@@ -62,7 +62,7 @@ export default function App() {
           <PromptPanel />
         </section>
         <section className="column">
-          <Viewer job={job} />
+          <Viewer job={job} jobs={jobs ?? []} onRigStarted={rigJob => { refreshJobs(); setSelectedJob(rigJob.id); }} />
           <JobList jobs={jobs ?? []} selected={selectedJob} onSelect={setSelectedJob} onChanged={refreshJobs} />
         </section>
       </main>
