@@ -26,7 +26,7 @@ class Config:
     # Skelett und Gewichte (SkinTokens, Rig-Dienst auf oi-o-mat, Server "rig" der Schranke).
     rig_model: str = "skintokens"
     # Bilder malen (img-o-mat, Server "images" der Schranke); das erste ist die Vorgabe auf der Seite.
-    paint_models: list = field(default_factory=lambda: ["klein-4b", "z-image-turbo"])
+    paint_models: list = field(default_factory=lambda: ["klein-4b", "z-image-turbo", "krea-2-turbo"])
     # Was an /v1/3d/generations geht, wenn der Auftrag nichts anderes sagt.
     defaults: dict = field(default_factory=lambda: {"texture_size": 2048, "decimation_target": 300000})
     # Freistellen: "auto" (rembg, wenn installiert, sonst einfarbiger Hintergrund), "rembg", "flood" oder "none".
@@ -64,6 +64,8 @@ GATE_MODELS = {
     "skintokens": {"backend": "rig"},
     "klein-4b": {"backend": "images"},
     "z-image-turbo": {"backend": "images"},
+    # Prüft jedes Bild mit dem Inhaltsfilter (img-o-mat, Lizenz §4.2) und braucht beim Malen etwa 22 GB.
+    "krea-2-turbo": {"backend": "images"},
 }
 
 
