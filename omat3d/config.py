@@ -21,7 +21,7 @@ class Config:
     # Die Anmeldung bei der LLM-Schranke, so wie sie PUT /gate/apps/<app> bekommt, dazu url und app.
     gate: dict = field(default_factory=dict)
     # LM-Studio- bzw. MLX-Serve-Keys aus gate.models.
-    trellis_model: str = "TRELLIS.2-4B-MLX-Serve-8bit"
+    trellis_model: str = "ddalcu/TRELLIS.2-4B-MLX-Serve-8bit"
     assist_model: str = "gemma-4-26b-a4b-it-qat-mlx"
     # Was an /v1/3d/generations geht, wenn der Auftrag nichts anderes sagt.
     defaults: dict = field(default_factory=lambda: {"texture_size": 2048, "decimation_target": 300000})

@@ -77,7 +77,7 @@ curl -X PATCH http://127.0.0.1:1235/gate/settings -H 'content-type: application/
 curl -s http://127.0.0.1:11234/v1/models | grep -o '"id":"[^"]*"'
 ```
 
-Die zweite Zeile funktioniert nur, wenn MLX-Serve läuft. Sie zeigt den Namen, unter dem MLX-Serve TRELLIS.2 führt. Genau dieser Name muss in `config.json` bei `trellisModel` und in `gate.models` stehen. Die Vorlage nimmt `TRELLIS.2-4B-MLX-Serve-8bit` an. Liegt das Modell nicht im Modellordner von MLX-Serve, kommt der absolute Pfad als `source` dazu.
+Die zweite Zeile funktioniert nur, wenn MLX-Serve läuft. Sie zeigt den Namen, unter dem MLX-Serve TRELLIS.2 führt. Genau dieser Name muss in `config.json` bei `trellisModel` und in `gate.models` stehen. Die Vorlage nimmt `ddalcu/TRELLIS.2-4B-MLX-Serve-8bit` an. Liegt das Modell nicht im Modellordner von MLX-Serve, kommt der absolute Pfad als `source` dazu.
 
 TRELLIS.2 braucht beim Rechnen deutlich mehr Speicher als im Leerlauf. Die Vorlage schätzt `ramGb: 18`. Damit das neben den anderen Apps geht, sollte `ramBudgetGb` der Schranke mindestens 18 sein (für immich-tagger ohnehin nötig). Den echten Spitzenwert beim ersten Lauf in der Aktivitätsanzeige ablesen und `ramGb` anpassen.
 
