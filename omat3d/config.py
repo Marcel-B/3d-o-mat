@@ -27,7 +27,7 @@ class Config:
     defaults: dict = field(default_factory=lambda: {"texture_size": 2048, "decimation_target": 300000})
     # Freistellen: "auto" (rembg, wenn installiert, sonst einfarbiger Hintergrund), "rembg", "flood" oder "none".
     cutout: str = "auto"
-    rembg_model: str = "birefnet-general"
+    rembg_model: str = "isnet-general-use"
     # So lange darf eine Anfrage an die Schranke dauern, Warten in ihrer Schlange eingeschlossen (dort bis 60 min).
     request_timeout_minutes: int = 75
 

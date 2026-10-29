@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -59,6 +60,8 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
             threading.Thread(target=register_with_gate, args=({**config.gate, "url": config.gate_url, "app": config.app_name}, log),
                              kwargs={"stop": jobs.stop}, daemon=True).start()
         jobs.start()
+        if config.cutout in ("auto", "rembg"):
+            threading.Thread(target=cutout.warm, args=(config.rembg_model, log), daemon=True).start()
         yield
         jobs.stop.set()
         jobs.wake.set()
@@ -143,7 +146,8 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         if len(data) > MAX_UPLOAD:
             raise HTTPException(413, "Bild größer als 40 MB")
         try:
-            png, info = cutout.cut(data, config.cutout, config.rembg_model)
+            # Im Thread: das Freistellen dauert Sekunden, die Seite fragt derweil weiter nach dem Stand.
+            png, info = await run_in_threadpool(cutout.cut, data, config.cutout, config.rembg_model)
         except Exception as error:  # noqa: BLE001 – Pillow wirft je nach Format anderes
             raise HTTPException(400, f"Kein lesbares Bild: {error}") from error
         image_id = new_id()

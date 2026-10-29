@@ -22,7 +22,7 @@ Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schran
 
 1. **Hochladen:** Ein Bild hochladen (PNG, JPEG, WebP). Die App stellt es frei:
    - Hat es schon Transparenz, bleibt die.
-   - Sonst entfernt rembg (BiRefNet) den Hintergrund.
+   - Sonst entfernt rembg (ISNet) den Hintergrund.
    - Ohne rembg wird nur ein einfarbiger Hintergrund entfernt.
 
    Danach wird das Bild quadratisch auf das Objekt zugeschnitten. TRELLIS.2 braucht so ein freigestelltes Bild, weil es selbst keinen Hintergrund entfernt.
@@ -83,7 +83,7 @@ TRELLIS.2 braucht beim Rechnen deutlich mehr Speicher als im Leerlauf. Die Vorla
 
 ### 4. Freigeben
 
-Beim ersten Start meldet sich die App bei der Schranke an. In `http://192.168.2.122:1235/gate` dann bei **3d-o-mat** TRELLIS.2 freigeben, Gemma ebenfalls freigeben oder installieren. Danach ist die Website unter `http://<container>:8090` erreichbar. Beim ersten Freistellen lädt rembg sein Modell (etwa 1 GB) in das Volume `rembg-cache`.
+Beim ersten Start meldet sich die App bei der Schranke an. In `http://192.168.2.122:1235/gate` dann bei **3d-o-mat** TRELLIS.2 freigeben, Gemma ebenfalls freigeben oder installieren. Danach ist die Website unter `http://<container>:8090` erreichbar. Beim Start lädt die App das rembg-Modell (etwa 170 MB) einmal in das Volume `rembg-cache`.
 
 ### Statt Proxmox: auf einem Mac
 
@@ -105,7 +105,7 @@ cp config.example.json config.json
 | `trellisModel`, `assistModel` | welche der angemeldeten Modelle für 3D und für Gemma |
 | `defaults` | Vorgaben für `/v1/3d/generations`: `texture_size`, `decimation_target`, auch `resolution`, `steps` |
 | `cutout` | `auto`, `rembg`, `flood` oder `none` |
-| `rembgModel` | z. B. `birefnet-general` (gut, etwa 1 GB) oder `u2net` (kleiner) |
+| `rembgModel` | Vorgabe `isnet-general-use`: auf einem 12-MP-Foto 9 s und 1,5 GB RAM. `birefnet-general` stellt etwas feiner frei, braucht aber 115 s und 9,5 GB, mehr als der Container hat |
 
 ## Entwickeln
 

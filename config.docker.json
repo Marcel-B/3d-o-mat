@@ -36,5 +36,5 @@
     "decimation_target": 300000
   },
   "cutout": "auto",
-  "rembgModel": "birefnet-general"
+  "rembgModel": "isnet-general-use"
 }
