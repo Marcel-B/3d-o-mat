@@ -123,6 +123,20 @@ class Gate:
                 raise StreamBroken(f"Verbindung abgerissen: {error}") from error
         raise StreamBroken("Die Antwort endete ohne Ergebnis (Modell entladen?)")
 
+    def rig(self, model: str, glb: bytes, kind: str = "humanoid", seed: int = 1) -> tuple[bytes, dict]:
+        """POST /v1/rig (Rig-Dienst auf oi-o-mat, rig/server.py): zurück kommen das GLB mit Skelett und der Bericht."""
+        body = {"model": model, "glb": base64.b64encode(glb).decode(), "class": kind, "seed": seed}
+        try:
+            with self._client() as client:
+                response = client.post("/v1/rig", json=body)
+        except httpx.TransportError as error:
+            raise StreamBroken(f"Verbindung abgerissen: {error}") from error
+        _check(response)
+        payload = response.json()
+        if payload.get("format") != "glb" or not payload.get("data"):
+            raise RuntimeError("Der Rig-Dienst lieferte kein GLB")
+        return base64.b64decode(payload["data"]), payload.get("report") or {}
+
     def status(self) -> dict | None:
         """Der Zustand der Schranke (GET /gate/status), oder None, wenn sie nicht antwortet."""
         try:

@@ -23,6 +23,8 @@ class Config:
     # LM-Studio- bzw. MLX-Serve-Keys aus gate.models.
     trellis_model: str = "ddalcu/TRELLIS.2-4B-MLX-Serve-8bit"
     assist_model: str = "gemma-4-26b-a4b-it-qat-mlx"
+    # Skelett und Gewichte (SkinTokens, Rig-Dienst auf oi-o-mat, Server "rig" der Schranke).
+    rig_model: str = "skintokens"
     # Was an /v1/3d/generations geht, wenn der Auftrag nichts anderes sagt.
     defaults: dict = field(default_factory=lambda: {"texture_size": 2048, "decimation_target": 300000})
     # Freistellen: "auto" (rembg, wenn installiert, sonst einfarbiger Hintergrund), "rembg", "flood" oder "none".
@@ -43,7 +45,7 @@ class Config:
 
 _KEYS = {
     "listen": "listen", "port": "port", "store": "store", "gate": "gate",
-    "trellisModel": "trellis_model", "assistModel": "assist_model", "defaults": "defaults", "cutout": "cutout",
+    "trellisModel": "trellis_model", "assistModel": "assist_model", "rigModel": "rig_model", "defaults": "defaults", "cutout": "cutout",
     "rembgModel": "rembg_model", "requestTimeoutMinutes": "request_timeout_minutes",
 }
 
