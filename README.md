@@ -79,7 +79,7 @@ curl -s http://127.0.0.1:11234/v1/models | grep -o '"id":"[^"]*"'
 
 Die zweite Zeile funktioniert nur, wenn MLX-Serve läuft. Sie zeigt den Namen, unter dem MLX-Serve TRELLIS.2 führt. Genau dieser Name muss in `config.json` bei `trellisModel` und in `gate.models` stehen. Die Vorlage nimmt `ddalcu/TRELLIS.2-4B-MLX-Serve-8bit` an. Liegt das Modell nicht im Modellordner von MLX-Serve, kommt der absolute Pfad als `source` dazu.
 
-TRELLIS.2 braucht beim Rechnen deutlich mehr Speicher als im Leerlauf. Die Vorlage schätzt `ramGb: 18`. Damit das neben den anderen Apps geht, sollte `ramBudgetGb` der Schranke mindestens 18 sein (für immich-tagger ohnehin nötig). Den echten Spitzenwert beim ersten Lauf in der Aktivitätsanzeige ablesen und `ramGb` anpassen.
+TRELLIS.2 braucht beim Rechnen mehr Speicher als im Leerlauf. Auf oi-o-mat (M6, 32 GB) zeigte die GPU beim ersten Lauf (Auflösung 1024, Textur 2048) höchstens etwa 9 GB, danach 7 GB, bis die Schranke es entlud. Die Vorlage meldet deshalb `ramGb: 12` an, mit Puffer für die Textur-Stufe.
 
 ### 4. Freigeben
 
