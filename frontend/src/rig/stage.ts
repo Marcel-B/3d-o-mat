@@ -78,6 +78,11 @@ export class RigStage {
 
   private boneColor: string;
 
+  setBoneColor(color: string) {
+    this.boneColor = color;
+    if (this.helper) (this.helper.material as THREE.LineBasicMaterial).color = new THREE.Color(color);
+  }
+
   dispose() {
     cancelAnimationFrame(this.frame);
     this.resizer.disconnect();

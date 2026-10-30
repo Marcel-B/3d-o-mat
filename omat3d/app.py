@@ -5,7 +5,7 @@ import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
@@ -61,6 +61,7 @@ class AnimatedRequest(BaseModel):
 
 class PromptRequest(BaseModel):
     idea: str = Field(..., min_length=1, max_length=1000)
+    lang: str = Field("de", pattern="^(de|en)$")
 
 
 def make_store(config: Config, log=print) -> Store:
@@ -206,9 +207,9 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         raise HTTPException(404, "original oder cutout")
 
     @app.post("/api/images/{image_id}/check")
-    def check(image_id: str):
+    def check(image_id: str, lang: str = Query("de", pattern="^(de|en)$")):
         doc = image(image_id)
-        doc["check"] = assist.check_image(gate, config.assist_model, store.get("images", image_id, "cutout.png"))
+        doc["check"] = assist.check_image(gate, config.assist_model, store.get("images", image_id, "cutout.png"), lang)
         return store.write("images", doc)
 
     @app.delete("/api/images/{image_id}")
@@ -239,7 +240,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
     @app.post("/api/prompts")
     def prompts(request: PromptRequest):
         try:
-            return assist.image_prompts(gate, config.assist_model, request.idea)
+            return assist.image_prompts(gate, config.assist_model, request.idea, request.lang)
         except ValueError as error:
             raise HTTPException(502, str(error)) from error
 

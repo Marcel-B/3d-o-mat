@@ -97,9 +97,10 @@ export const api = {
     form.append('file', file);
     return call<Image>('POST', '/api/images', form);
   },
-  check: (id: string) => call<Image>('POST', `/api/images/${id}/check`),
+  // Gemma antwortet in der Sprache der Oberfläche.
+  check: (id: string, lang: string) => call<Image>('POST', `/api/images/${id}/check?lang=${lang}`),
   deleteImage: (id: string) => call('DELETE', `/api/images/${id}`),
-  prompts: (idea: string) => call<Prompts>('POST', '/api/prompts', { idea }),
+  prompts: (idea: string, lang: string) => call<Prompts>('POST', '/api/prompts', { idea, lang }),
   paint: (prompt: string, model: string, n: number) => call<Painting>('POST', '/api/paint', { prompt, model, n }),
   paintings: () => call<Painting[]>('GET', '/api/paint'),
   jobs: () => call<Job[]>('GET', '/api/jobs'),

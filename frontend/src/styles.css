@@ -14,8 +14,9 @@
   --stage: #eef0ef;
   color-scheme: light;
 }
+/* Dunkel: nach dem System, wenn nichts gewählt ist, oder ausdrücklich. Die Werte stehen deshalb zweimal. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #121314;
     --card: #1b1d1f;
     --text: #ececeb;
@@ -31,6 +32,22 @@
     --stage: #17191a;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #121314;
+  --card: #1b1d1f;
+  --text: #ececeb;
+  --muted: #9b9fa3;
+  --line: #2d3033;
+  --accent: #2dd4bf;
+  --accent-text: #062a26;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --checker-a: #26292b;
+  --checker-b: #1f2224;
+  --stage: #17191a;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -49,7 +66,14 @@ h2 { font-size: 1rem; margin: 0 0 12px; display: flex; align-items: center; gap:
 .detail h2 { margin-top: 20px; }
 .step { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--accent-text); font-size: .78rem; }
 
+.top-right { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: flex-end; }
 .status { display: flex; flex-wrap: wrap; gap: 6px; }
+.settings { display: flex; gap: 8px; }
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.segmented button { border: 0; border-radius: 0; padding: 3px 9px; font-size: .8rem; color: var(--muted); }
+.segmented button + button { border-left: 1px solid var(--line); }
+.segmented button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--text); }
+.segmented svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: .8rem; border: 1px solid currentColor; white-space: nowrap; }
 .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .muted { color: var(--muted); }
 .small { font-size: .84rem; }

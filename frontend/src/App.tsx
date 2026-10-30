@@ -5,6 +5,9 @@ import { ImagePanel } from './components/ImagePanel';
 import { PromptPanel } from './components/PromptPanel';
 import { JobList } from './components/JobList';
 import { Viewer } from './components/Viewer';
+import { Settings } from './components/Settings';
+import { useT } from './i18n';
+import { useTheme } from './theme';
 
 function usePoll<T>(load: () => Promise<T>, ms: number): [T | null, string | null, () => void] {
   const [value, setValue] = useState<T | null>(null);
@@ -26,6 +29,8 @@ export default function App() {
   const [jobs, , refreshJobs] = usePoll<Job[]>(api.jobs, 2000);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedJob, setSelectedJob] = useState<string | null>(null);
+  const [theme, setTheme, scheme] = useTheme();
+  const t = useT();
 
   // Ein frisch fertiger Auftrag zeigt sich von selbst, solange man nichts anderes ausgewählt hat.
   useEffect(() => {
@@ -43,10 +48,13 @@ export default function App() {
           <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 28 10v12l-12 7-12-7V10z" /><path d="M16 3v26M4 10l12 7 12-7" className="edge" /></svg>
           <div>
             <h1>3d-o-mat</h1>
-            <p>Aus einem Bild ein 3D-Modell. Gerechnet von TRELLIS.2 auf oi-o-mat.</p>
+            <p>{t.tagline}</p>
           </div>
         </div>
-        <StatusBar status={status} error={statusError} />
+        <div className="top-right">
+          <StatusBar status={status} error={statusError} />
+          <Settings theme={theme} onTheme={setTheme} />
+        </div>
       </header>
 
       <main className="grid">
@@ -62,7 +70,7 @@ export default function App() {
           <PromptPanel status={status} onPainted={ids => { refreshImages(); setSelectedImage(ids[0]); }} />
         </section>
         <section className="column">
-          <Viewer job={job} jobs={jobs ?? []} onRigStarted={rigJob => { refreshJobs(); setSelectedJob(rigJob.id); }} />
+          <Viewer job={job} jobs={jobs ?? []} scheme={scheme} onRigStarted={rigJob => { refreshJobs(); setSelectedJob(rigJob.id); }} />
           <JobList jobs={jobs ?? []} selected={selectedJob} onSelect={setSelectedJob} onChanged={refreshJobs} />
         </section>
       </main>

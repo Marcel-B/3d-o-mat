@@ -17,6 +17,8 @@ Browser ──► 3d-o-mat (Proxmox, :8090) ──ssh──► oi-o-mat: store/l
 
 Die Website erreicht die T7 wie img-o-mat seinen Maler: per SSH, mit einem eigenen Schlüssel, der auf oi-o-mat nur `store/launch.py` starten darf. Das Skript kennt fünf Wörter (`check`, `put`, `get`, `list`, `delete`) und nur Pfade der Form `images|jobs/<id>/<name>`. Dafür läuft auf oi-o-mat kein Dienst und ist kein Port offen. Die Liste der Bilder und Aufträge hält die Website im Speicher und liest sie beim Start von der T7.
 
+Die Oberfläche gibt es auf Deutsch und Englisch, dazu hell, dunkel oder nach dem System; beides lässt sich oben rechts umschalten und bleibt im Browser gespeichert (`localStorage`: `lang`, `theme`). Ohne Wahl folgt die Sprache dem Browser. Gemma prüft und schreibt in der Sprache der Oberfläche; die Bild-Prompts bleiben englisch. Meldungen der Python-App (Fehler, Stand eines Auftrags) sind noch deutsch.
+
 Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schranke als `3d-o-mat` an. Die Schranke lässt Tonwerk vor, reiht nach Priorität ein, startet MLX-Serve bei Bedarf und entlädt TRELLIS.2 nach 2 Minuten Leerlauf wieder. Lizenz: MIT.
 
 ## So läuft ein Auftrag

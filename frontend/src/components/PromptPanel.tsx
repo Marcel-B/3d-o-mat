@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type Painting, type Prompts, type Status } from '../api';
+import { useLang } from '../i18n';
 
 const labels: Record<string, string> = { 'klein-4b': 'FLUX.2 Klein 4B', 'z-image-turbo': 'Z-Image Turbo', 'krea-2-turbo': 'Krea 2 Turbo' };
-const stages: Record<string, string> = {
-  queued: 'wartet', sending: 'schickt', loading: 'lädt das Modell', painting: 'malt', checking: 'prüft', cutout: 'stellt frei',
-};
 
 type Props = { status: Status | null; onPainted: (imageIds: string[]) => void };
 
@@ -21,6 +19,7 @@ export function PromptPanel({ status, onPainted }: Props) {
   const [paintings, setPaintings] = useState<Painting[]>([]);
   const seen = useRef(new Set<string>());
   const painted = useRef(onPainted);
+  const { lang, t: { paint: t } } = useLang();
   painted.current = onPainted;
 
   const models = status?.paint.models ?? [];
@@ -48,7 +47,7 @@ export function PromptPanel({ status, onPainted }: Props) {
     setBusy(true);
     setError(null);
     try {
-      setResult(await api.prompts(idea));
+      setResult(await api.prompts(idea, lang));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -73,38 +72,37 @@ export function PromptPanel({ status, onPainted }: Props) {
       setCopied(index);
       setTimeout(() => setCopied(null), 1500);
     } catch {
-      setError('Kopieren geht nur über https oder localhost; den Text bitte markieren.');
+      setError(t.copyFailed);
     }
   }
 
   const visible = paintings.filter(p => p.state !== 'done').slice(0, 4);
   return (
     <div className="card">
-      <h2>Noch kein Bild? Malen lassen</h2>
+      <h2>{t.title}</h2>
       <textarea
         rows={2}
-        placeholder="Idee oder Prompt, z. B. ein alter Messing-Kompass mit aufgeklapptem Deckel"
+        placeholder={t.placeholder}
         value={idea}
         onChange={e => setIdea(e.target.value)}
       />
       <div className="row">
-        <button onClick={generate} disabled={busy || !idea.trim()}>{busy ? 'Gemma schreibt …' : 'Prompts schreiben'}</button>
-        <button onClick={() => paint(idea.trim())} disabled={!idea.trim() || !chosen}>Direkt malen</button>
+        <button onClick={generate} disabled={busy || !idea.trim()}>{busy ? t.writing : t.write}</button>
+        <button onClick={() => paint(idea.trim())} disabled={!idea.trim() || !chosen}>{t.direct}</button>
         {models.length > 0 && (
           <>
-            <select aria-label="Bildmodell" value={chosen?.id ?? ''} onChange={e => setModel(e.target.value)}>
+            <select aria-label={t.model} value={chosen?.id ?? ''} onChange={e => setModel(e.target.value)}>
               {models.map(m => <option key={m.id} value={m.id}>{labels[m.id] ?? m.id}</option>)}
             </select>
-            <select aria-label="Anzahl" value={count} onChange={e => setCount(Number(e.target.value))}>
-              {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n} {n === 1 ? 'Bild' : 'Bilder'}</option>)}
+            <select aria-label={t.count} value={count} onChange={e => setCount(Number(e.target.value))}>
+              {[1, 2, 3, 4].map(n => <option key={n} value={n}>{t.images(n)}</option>)}
             </select>
           </>
         )}
       </div>
       <div className="muted small">
-        Gemma macht aus der Idee englische Prompts für eine gute Vorlage (ein Objekt, ganz im Bild, schlichter Hintergrund).
-        Gemalt wird mit img-o-mat auf oi-o-mat, etwa eine Minute je Bild.
-        {chosen && !chosen.approved && <> <span className="warn">{labels[chosen.id] ?? chosen.id} ist in der Schranke noch nicht freigegeben.</span></>}
+        {t.hint}
+        {chosen && !chosen.approved && <> <span className="warn">{t.notApproved(labels[chosen.id] ?? chosen.id)}</span></>}
       </div>
       {error && <div className="error">{error}</div>}
       {visible.map(p => (
@@ -113,7 +111,7 @@ export function PromptPanel({ status, onPainted }: Props) {
           {p.state === 'running' ? (
             <div className="progress">
               {p.stage === 'painting' && p.fraction !== null && <div className="bar" style={{ width: `${Math.round(p.fraction * 100)}%` }} />}
-              <span>{labels[p.model] ?? p.model} {stages[p.stage ?? ''] ?? p.stage ?? '…'}{p.stage === 'queued' && p.place ? ` (Platz ${p.place})` : ''}</span>
+              <span>{labels[p.model] ?? p.model} {t.stages[p.stage ?? ''] ?? p.stage ?? '…'}{p.stage === 'queued' && p.place ? t.place(p.place) : ''}</span>
               <span className="count">{p.stage === 'painting' && p.fraction !== null ? `${Math.round(p.fraction * 100)} %` : ''}</span>
             </div>
           ) : (
@@ -126,9 +124,9 @@ export function PromptPanel({ status, onPainted }: Props) {
           {result.prompts.map((prompt, index) => (
             <li key={prompt}>
               <p>{prompt}</p>
-              <button className="link" onClick={() => paint(prompt)} disabled={!chosen}>malen</button>
+              <button className="link" onClick={() => paint(prompt)} disabled={!chosen}>{t.paint}</button>
               {' · '}
-              <button className="link" onClick={() => copy(prompt, index)}>{copied === index ? 'kopiert' : 'kopieren'}</button>
+              <button className="link" onClick={() => copy(prompt, index)}>{copied === index ? t.copied : t.copy}</button>
             </li>
           ))}
         </ol>
