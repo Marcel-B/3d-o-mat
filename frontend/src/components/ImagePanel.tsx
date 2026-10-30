@@ -1,12 +1,6 @@
 import { useRef, useState } from 'react';
 import { api, cutoutUrl, originalUrl, type Image, type Job, type Options, type Status } from '../api';
-
-const methods: Record<Image['cutout']['method'], string> = {
-  alpha: 'hatte schon Transparenz',
-  rembg: 'freigestellt mit rembg',
-  flood: 'einfarbigen Hintergrund entfernt',
-  none: 'unverändert',
-};
+import { useLang, useT } from '../i18n';
 
 type Props = {
   status: Status | null;
@@ -23,6 +17,7 @@ export function ImagePanel({ status, images, selected, onSelect, onChanged, onSt
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const image = images.find(i => i.id === selected) ?? null;
+  const { image: t } = useT();
 
   async function run<T>(what: string, task: () => Promise<T>): Promise<T | undefined> {
     setBusy(what);
@@ -39,7 +34,7 @@ export function ImagePanel({ status, images, selected, onSelect, onChanged, onSt
   async function upload(files: FileList | null) {
     const file = files?.[0];
     if (!file) return;
-    const created = await run('Freistellen …', () => api.upload(file));
+    const created = await run(t.cutting, () => api.upload(file));
     if (created) {
       onChanged();
       onSelect(created.id);
@@ -49,7 +44,7 @@ export function ImagePanel({ status, images, selected, onSelect, onChanged, onSt
 
   return (
     <div className="card">
-      <h2><span className="step">1</span> Bild</h2>
+      <h2><span className="step">1</span> {t.title}</h2>
       <label
         className={`drop ${dragging ? 'over' : ''} ${status && !status.storage.mounted ? 'disabled' : ''}`}
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
@@ -57,8 +52,8 @@ export function ImagePanel({ status, images, selected, onSelect, onChanged, onSt
         onDrop={e => { e.preventDefault(); setDragging(false); upload(e.dataTransfer.files); }}
       >
         <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" onChange={e => upload(e.target.files)} />
-        <strong>{busy === 'Freistellen …' ? busy : 'Bild wählen oder hierher ziehen'}</strong>
-        <span className="muted">Ein einzelnes Objekt, ganz im Bild, am besten vor schlichtem Hintergrund oder schon freigestellt (PNG mit Transparenz).</span>
+        <strong>{busy === t.cutting ? busy : t.choose}</strong>
+        <span className="muted">{t.advice}</span>
       </label>
       {error && <div className="error">{error}</div>}
 
@@ -93,67 +88,68 @@ function ImageDetail({ image, status, busy, run, onChanged, onStarted, onDeleted
   const set = (key: keyof Options, value: string) =>
     setOptions(o => ({ ...o, [key]: value === '' ? undefined : Number(value) }));
   const check = image.check;
+  const { lang, t: { locale, image: t } } = useLang();
 
   return (
     <div className="detail">
       <div className="pair">
-        <figure><img src={originalUrl(image.id)} alt="Original" /><figcaption>Original</figcaption></figure>
-        <figure className="checker"><img src={cutoutUrl(image.id)} alt="Freigestellt" /><figcaption>geht an TRELLIS.2 · {methods[image.cutout.method]}</figcaption></figure>
+        <figure><img src={originalUrl(image.id)} alt={t.original} /><figcaption>{t.original}</figcaption></figure>
+        <figure className="checker"><img src={cutoutUrl(image.id)} alt={t.cutout} /><figcaption>{t.goesTo} · {t.methods[image.cutout.method]}</figcaption></figure>
       </div>
       {image.cutout.note && <div className="hint">{image.cutout.note}</div>}
       {image.painted && (
-        <div className="muted small painted">Gemalt mit {image.painted.model}{image.painted.seed !== null && <>, Seed {image.painted.seed}</>}: „{image.painted.prompt}“</div>
+        <div className="muted small painted">{t.paintedWith} {image.painted.model}{image.painted.seed !== null && <>, {t.seed} {image.painted.seed}</>}: {t.quote(image.painted.prompt)}</div>
       )}
 
       <div className="row">
-        <button onClick={() => run('Gemma prüft …', api.check.bind(null, image.id)).then(r => r && onChanged())} disabled={!!busy}>
-          {busy === 'Gemma prüft …' ? busy : check ? 'Neu prüfen' : 'Mit Gemma prüfen'}
+        <button onClick={() => run(t.checking, () => api.check(image.id, lang)).then(r => r && onChanged())} disabled={!!busy}>
+          {busy === t.checking ? busy : check ? t.recheck : t.check}
         </button>
-        <span className="muted small">Prüft, ob das Bild ein gutes Ausgangsbild ist. Kann warten, wenn Tonwerk arbeitet.</span>
+        <span className="muted small">{t.checkHint}</span>
       </div>
       {check && (
         <div className={`verdict ${check.suitable ? 'ok' : 'warn'}`}>
-          <strong>{check.suitable ? 'Geeignet' : 'Eher nicht geeignet'}</strong>{check.object && <> · {check.object}</>}
+          <strong>{check.suitable ? t.suitable : t.unsuitable}</strong>{check.object && <> · {check.object}</>}
           {check.problems.length > 0 && <ul>{check.problems.map(p => <li key={p}>{p}</li>)}</ul>}
-          {check.tips.length > 0 && <div className="muted small">Tipps: {check.tips.join(' · ')}</div>}
+          {check.tips.length > 0 && <div className="muted small">{t.tips}: {check.tips.join(' · ')}</div>}
         </div>
       )}
 
-      <h2><span className="step">2</span> Umwandeln</h2>
+      <h2><span className="step">2</span> {t.convertTitle}</h2>
       <div className="options">
-        <label>Textur
+        <label>{t.texture}
           <select value={options.texture_size ?? ''} onChange={e => set('texture_size', e.target.value)}>
-            <option value="">Vorgabe ({defaults.texture_size ?? 2048})</option>
+            <option value="">{t.preset(String(defaults.texture_size ?? 2048))}</option>
             {[1024, 2048, 4096].map(v => <option key={v} value={v}>{v} px</option>)}
           </select>
         </label>
-        <label>Flächen
+        <label>{t.faces}
           <select value={options.decimation_target ?? ''} onChange={e => set('decimation_target', e.target.value)}>
-            <option value="">Vorgabe ({(defaults.decimation_target ?? 300000).toLocaleString('de-DE')})</option>
-            {[50000, 150000, 300000, 600000].map(v => <option key={v} value={v}>{v.toLocaleString('de-DE')}</option>)}
+            <option value="">{t.preset((defaults.decimation_target ?? 300000).toLocaleString(locale))}</option>
+            {[50000, 150000, 300000, 600000].map(v => <option key={v} value={v}>{v.toLocaleString(locale)}</option>)}
           </select>
         </label>
-        <label>Auflösung
+        <label>{t.resolution}
           <select value={options.resolution ?? ''} onChange={e => set('resolution', e.target.value)}>
-            <option value="">Vorgabe des Modells</option>
-            <option value="512">512 (wenig Speicher, falls das Paket es hat)</option>
+            <option value="">{t.modelPreset}</option>
+            <option value="512">{t.lowMemory}</option>
             <option value="1024">1024</option>
           </select>
         </label>
         <label>Seed
-          <input type="number" min={0} placeholder="zufällig" value={options.seed ?? ''} onChange={e => set('seed', e.target.value)} />
+          <input type="number" min={0} placeholder={t.random} value={options.seed ?? ''} onChange={e => set('seed', e.target.value)} />
         </label>
       </div>
       <div className="row">
         <button
           className="primary"
           disabled={!!busy || !status?.storage.mounted}
-          onClick={() => run('Startet …', () => api.createJob(image.id, options)).then(job => job && onStarted(job))}
-        >In 3D umwandeln</button>
-        <span className="muted small">Dauert auf oi-o-mat etwa 5 bis 10 Minuten, Warten auf Tonwerk nicht eingerechnet.</span>
+          onClick={() => run(t.starting, () => api.createJob(image.id, options)).then(job => job && onStarted(job))}
+        >{t.convert}</button>
+        <span className="muted small">{t.convertHint}</span>
         <button className="link danger" disabled={!!busy}
-          onClick={() => confirm(`${image.name} löschen?`) && run('Löscht …', () => api.deleteImage(image.id)).then(r => { if (r) { onDeleted(); onChanged(); } })}
-        >Bild löschen</button>
+          onClick={() => confirm(t.confirmDelete(image.name)) && run(t.deleting, () => api.deleteImage(image.id)).then(r => { if (r) { onDeleted(); onChanged(); } })}
+        >{t.delete}</button>
       </div>
     </div>
   );

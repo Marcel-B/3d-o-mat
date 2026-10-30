@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { RigStage, type Clip, type Facts } from './stage';
+import { useLang } from '../i18n';
 
-const clips: [Clip, string][] = [
-  ['walk', 'Gehen'], ['punch', 'Schlag'], ['kick', 'Tritt'], ['arms', 'Arme heben'], ['squat', 'Kniebeuge'], ['fall', 'Umfallen'],
-];
+const order: Clip[] = ['walk', 'punch', 'kick', 'arms', 'squat', 'fall'];
 
 // Ein GLB mit Skelett ansehen und bewegen: Proben, Knochen von Hand, Skelett und Drahtgitter.
-export function RigViewer({ url, jobId }: { url: string; jobId: string }) {
+export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; scheme: 'light' | 'dark' }) {
+  const { t: { locale, rig: t } } = useLang();
+  // Die Proben heißen im GLB so wie auf der Seite.
+  const clips = order.map(clip => [clip, t.clips[clip]] as [Clip, string]);
+  const loadFailed = useRef(t.loadFailed);
+  loadFailed.current = t.loadFailed;
   const canvas = useRef<HTMLCanvasElement>(null);
   const stage = useRef<RigStage | null>(null);
   const [facts, setFacts] = useState<Facts | null>(null);
@@ -31,9 +35,15 @@ export function RigViewer({ url, jobId }: { url: string; jobId: string }) {
       setFacts(f);
       const arm = s.bones.indexOf(s.find('LeftArm')!);
       setBone(arm >= 0 ? arm : 0);
-    }, e => setError(`Das Modell ließ sich nicht laden: ${(e as Error).message}`));
+    }, e => setError(loadFailed.current((e as Error).message)));
     return () => s.dispose();
   }, [url]);
+
+  // Die Knochen in der Akzentfarbe des Farbschemas, auch wenn es umschaltet.
+  useEffect(() => {
+    const color = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    if (color) stage.current?.setBoneColor(color);
+  }, [scheme, facts]);
 
   useEffect(() => { if (stage.current) stage.current.amplitude = amp; }, [amp]);
   useEffect(() => { stage.current?.showSkeleton(skeleton); }, [skeleton, facts]);
@@ -71,7 +81,7 @@ export function RigViewer({ url, jobId }: { url: string; jobId: string }) {
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 10000);
     } catch (e) {
-      setExportError(`Export ging nicht: ${(e as Error).message}`);
+      setExportError(t.exportFailed((e as Error).message));
     } finally {
       setExporting(false);
     }
@@ -82,7 +92,7 @@ export function RigViewer({ url, jobId }: { url: string; jobId: string }) {
     <div className="rig">
       <div className="stage rig-stage">
         <canvas ref={canvas} />
-        {!facts && !error && <div className="empty muted">Lädt das Modell mit Skelett …</div>}
+        {!facts && !error && <div className="empty muted">{t.loading}</div>}
         {error && <div className="empty bad">{error}</div>}
       </div>
       {facts && (
@@ -91,15 +101,15 @@ export function RigViewer({ url, jobId }: { url: string; jobId: string }) {
             {clips.map(([id, label]) => (
               <button key={id} type="button" className={clip === id ? 'primary' : ''} aria-pressed={clip === id} onClick={() => play(id)}>{label}</button>
             ))}
-            <label className="small muted amp">Stärke
+            <label className="small muted amp">{t.strength}
               <input id="rig-amp" type="range" min={0} max={1.5} step={0.05} value={amp} onChange={e => setAmp(Number(e.target.value))} />
             </label>
           </div>
           <details>
-            <summary>Knochen von Hand drehen</summary>
+            <summary>{t.byHand}</summary>
             <div className="bone-grid">
-              <select id="rig-bone" value={bone} onChange={e => { setBone(Number(e.target.value)); setAngles([0, 0, 0]); }} aria-label="Knochen">
-                {stage.current?.bones.map((b, i) => <option key={i} value={i}>{b.name || `Knochen ${i}`}</option>)}
+              <select id="rig-bone" value={bone} onChange={e => { setBone(Number(e.target.value)); setAngles([0, 0, 0]); }} aria-label={t.bone}>
+                {stage.current?.bones.map((b, i) => <option key={i} value={i}>{b.name || `${t.bone} ${i}`}</option>)}
               </select>
               {(['X', 'Y', 'Z'] as const).map((axis, i) => (
                 <label key={axis} className="axis">{axis}
@@ -110,19 +120,19 @@ export function RigViewer({ url, jobId }: { url: string; jobId: string }) {
             </div>
           </details>
           <div className="row tight">
-            <button type="button" onClick={reset}>Grundhaltung</button>
-            <button type="button" className={skeleton ? 'primary' : ''} aria-pressed={skeleton} onClick={() => setSkeleton(!skeleton)}>Skelett</button>
-            <button type="button" className={wire ? 'primary' : ''} aria-pressed={wire} onClick={() => setWire(!wire)}>Drahtgitter</button>
+            <button type="button" onClick={reset}>{t.restPose}</button>
+            <button type="button" className={skeleton ? 'primary' : ''} aria-pressed={skeleton} onClick={() => setSkeleton(!skeleton)}>{t.skeleton}</button>
+            <button type="button" className={wire ? 'primary' : ''} aria-pressed={wire} onClick={() => setWire(!wire)}>{t.wireframe}</button>
             <span className="small muted">
-              {facts.bones} Knochen · {facts.vertices.toLocaleString('de-DE')} Punkte · Mixamo-Kern {facts.core.length - missing.length}/{facts.core.length}
+              {t.facts(facts.bones, facts.vertices.toLocaleString(locale), `${facts.core.length - missing.length}/${facts.core.length}`)}
             </span>
           </div>
           <div className="row tight">
-            <button type="button" onClick={download} disabled={exporting}>{exporting ? 'Packt …' : 'GLB mit Proben herunterladen'}</button>
-            <span className="small muted">Die sechs Proben als Animationen (30 Bilder je Sekunde, Stärke wie eingestellt), in Godot im AnimationPlayer.</span>
+            <button type="button" onClick={download} disabled={exporting}>{exporting ? t.packing : t.download}</button>
+            <span className="small muted">{t.downloadHint}</span>
           </div>
           {exportError && <div className="error">{exportError}</div>}
-          {missing.length > 0 && <div className="small warn">Ohne Mixamo-Namen: {missing.map(m => m.name).join(', ')}. Proben bewegen diese Teile nicht.</div>}
+          {missing.length > 0 && <div className="small warn">{t.missing(missing.map(m => m.name).join(', '))}</div>}
         </div>
       )}
     </div>

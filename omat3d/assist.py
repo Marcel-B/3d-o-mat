@@ -19,14 +19,22 @@ CHECK_PROMPT = """Du prüfst ein Bild, bevor es ein Bild-zu-3D-Modell (TRELLIS.2
 vollständig im Bild, nicht abgeschnitten, nicht verdeckt, scharf, gleichmäßig beleuchtet, freigestellt oder vor
 schlichtem Hintergrund, eher schräg von vorn als genau von vorn. Schlecht sind Szenen, mehrere Objekte, Text als
 Hauptsache, Spiegelungen, Glas und durchsichtige Teile, Bewegungsunschärfe.
-Antworte nur mit JSON: {"suitable": true|false, "object": "<was es ist, kurz>", "problems": ["<kurz, deutsch>"],
-"tips": ["<kurz, deutsch>"]}"""
+Antworte nur mit JSON: {"suitable": true|false, "object": "<was es ist, kurz, {sprache}>", "problems": ["<kurz, {sprache}>"],
+"tips": ["<kurz, {sprache}>"]}"""
 
 PROMPT_PROMPT = """Du schreibst Prompts für ein Bildmodell (FLUX). Das Bild dient als Vorlage für ein Bild-zu-3D-Modell.
 Daher immer: genau ein Objekt, vollständig sichtbar und mittig, Dreiviertelansicht leicht von oben, weicher
 Studio-Licht, schlichter hellgrauer Hintergrund, kein Boden-Schatten, keine weiteren Gegenstände, kein Text,
 scharf, Produktfoto. Schreib die Prompts auf Englisch, je 1 bis 3 Sätze, mit Material und Farben.
-Antworte nur mit JSON: {"prompts": ["…", "…", "…"], "note": "<ein kurzer deutscher Satz, was du betont hast>"}"""
+Antworte nur mit JSON: {"prompts": ["…", "…", "…"], "note": "<ein kurzer Satz auf {sprache}, was du betont hast>"}"""
+
+# Die Oberfläche gibt es auf Deutsch und Englisch; Gemma antwortet in ihrer Sprache. Die Bild-Prompts bleiben englisch.
+LANGUAGES = {"de": "Deutsch", "en": "Englisch"}
+
+
+def _prompt(template: str, lang: str) -> str:
+    # replace statt format: die Vorlagen enthalten JSON mit geschweiften Klammern.
+    return template.replace("{sprache}", LANGUAGES.get(lang, LANGUAGES["de"]))
 
 
 def _json(text: str) -> dict:
@@ -48,9 +56,9 @@ def _preview(png: bytes, side: int = 768) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
 
 
-def check_image(gate: Gate, model: str, png: bytes) -> dict:
+def check_image(gate: Gate, model: str, png: bytes, lang: str = "de") -> dict:
     answer = gate.chat(model, [{"role": "user", "content": [
-        {"type": "text", "text": CHECK_PROMPT},
+        {"type": "text", "text": _prompt(CHECK_PROMPT, lang)},
         {"type": "image_url", "image_url": {"url": _preview(png)}},
     ]}], max_tokens=500, temperature=0.1)
     result = _json(answer)
@@ -62,12 +70,12 @@ def check_image(gate: Gate, model: str, png: bytes) -> dict:
     }
 
 
-def image_prompts(gate: Gate, model: str, idea: str) -> dict:
+def image_prompts(gate: Gate, model: str, idea: str, lang: str = "de") -> dict:
     idea = idea.strip()[:1000]
     if not idea:
         raise ValueError("Keine Idee angegeben")
     answer = gate.chat(model, [
-        {"role": "system", "content": PROMPT_PROMPT},
+        {"role": "system", "content": _prompt(PROMPT_PROMPT, lang)},
         {"role": "user", "content": idea},
     ], max_tokens=900, temperature=0.8)
     result = _json(answer)

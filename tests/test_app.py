@@ -190,6 +190,18 @@ def test_gemma_check_and_prompts(make):
         assert prompts["prompts"] == ["a red ceramic disc"]
 
 
+def test_gemma_answers_in_the_language_of_the_page(make):
+    client, gate = make([])
+    with client:
+        image = upload(client)
+        assert client.post(f"/api/images/{image['id']}/check?lang=en").status_code == 200
+        assert client.post("/api/prompts", json={"idea": "a red disc", "lang": "en"}).status_code == 200
+        assert client.post("/api/prompts", json={"idea": "a red disc", "lang": "fr"}).status_code == 422
+    chats = [json.loads(r.content)["messages"] for r in gate.requests if r.url.path == "/v1/chat/completions"]
+    assert "<kurz, Englisch>" in chats[0][0]["content"][0]["text"]
+    assert "Satz auf Englisch" in chats[1][0]["content"]
+
+
 def test_bad_options_are_refused(make):
     with make([])[0] as client:
         image = upload(client)
