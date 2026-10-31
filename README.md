@@ -118,14 +118,17 @@ Beim ersten Start meldet sich die App bei der Schranke an. In `http://192.168.2.
 
 ### Statt Proxmox: auf einem Mac
 
+Die ganze Anleitung steht in [docs/mac.md](docs/mac.md): Werkzeuge (Python 3.12, Node 22), Bauen, Ablage, Einstellung, Freigaben und was tun, wenn es hakt. Kurz:
+
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-rembg.txt
+python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-rembg.txt
 (cd frontend && npm ci && npm run build)
 cp config.example.json config.json
+mkdir -p ~/3d-o-mat-daten && touch ~/3d-o-mat-daten/.3d-o-mat   # dann store.folder auf diesen Ordner setzen
 .venv/bin/python -m omat3d
 ```
 
-`config.example.json` nimmt `"store": {"folder": "/Volumes/T7/3d-o-mat"}`. Ohne `ssh` ruft die Website `store/launch.py` selbst auf, mit demselben Kennzeichen `.3d-o-mat`.
+`config.example.json` nimmt `"store": {"folder": "/Volumes/T7/3d-o-mat"}`. Ohne `ssh` ruft die Website `store/launch.py` selbst auf, mit demselben Kennzeichen `.3d-o-mat`; macOS' eigenes Python 3.9 reicht für die App nicht.
 
 ## Einstellungen (`config.json`)
 
