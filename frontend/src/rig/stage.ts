@@ -10,28 +10,30 @@ export type Clip = 'walk' | 'punch' | 'kick' | 'arms' | 'squat' | 'fall';
 export type Track = { node: number; path: 'rotation' | 'translation'; values: number[] };
 export type Baked = { name: string; times: number[]; tracks: Track[] };
 // Eine Haltung in Grad je Knochen, [x, y, z] in Worten statt Achsen (wie Gemma sie schreibt, omat3d/assist.py):
-// Rumpf, Hals, Kopf: x nach vorn neigen, y nach links drehen, z zur linken Seite neigen. Oberarm: z abspreizen (0 hängt,
-// 90 waagrecht), x nach vorn heben. Unterarm: x Ellbogen beugen, z nach außen und oben. Oberschenkel: x nach vorn,
-// z nach außen. Knie: x beugen. Fuß: x Zehen heben. Links und rechts aus Sicht der Figur.
+// Rumpf, Hals, Kopf: x nach vorn neigen, y nach links drehen, z zur linken Seite neigen. Oberarm: x heben (0 hängt,
+// 90 waagrecht, 180 senkrecht nach oben), z wohin (0 nach vorn, 90 zur Seite, 180 nach hinten), y um sich selbst drehen.
+// Unterarm: x Ellbogen beugen, z nach außen und oben. Oberschenkel: x nach vorn, z nach außen. Knie: x beugen.
+// Fuß: x Zehen heben. Links und rechts aus Sicht der Figur.
 export type Pose = Record<string, [number, number, number]>;
-export type PoseName = 'down' | 'relaxed' | 'hero' | 'stride' | 'wave';
+export type PoseName = 'down' | 'relaxed' | 'hero' | 'stride' | 'wave' | 'cheer';
 export const POSES: Record<PoseName, Pose> = {
-  down: { LeftArm: [0, 0, 6], RightArm: [0, 0, 6], LeftForeArm: [8, 0, 0], RightForeArm: [8, 0, 0] },
+  down: { LeftArm: [6, 0, 90], RightArm: [6, 0, 90], LeftForeArm: [8, 0, 0], RightForeArm: [8, 0, 0] },
   relaxed: {
-    Spine: [0, 5, 3], Neck: [3, -8, 0], LeftArm: [5, 0, 8], RightArm: [-5, 0, 10], LeftForeArm: [15, 0, 0],
+    Spine: [0, 5, 3], Neck: [3, -8, 0], LeftArm: [9, 0, 60], RightArm: [11, 0, 115], LeftForeArm: [15, 0, 0],
     RightForeArm: [10, 0, 0], LeftUpLeg: [8, 0, 2], LeftLeg: [14, 0, 0], RightUpLeg: [0, 0, 3],
   },
   hero: {
-    Spine: [-4, 0, 0], Spine2: [-4, 0, 0], Neck: [-4, 15, 0], LeftArm: [0, 0, 22], RightArm: [0, 0, 22],
+    Spine: [-4, 0, 0], Spine2: [-4, 0, 0], Neck: [-4, 15, 0], LeftArm: [22, 0, 90], RightArm: [22, 0, 90],
     LeftForeArm: [25, 0, 0], RightForeArm: [25, 0, 0], LeftUpLeg: [0, 0, 9], RightUpLeg: [0, 0, 9],
   },
   stride: {
-    Spine: [3, -6, 0], LeftArm: [-15, 0, 8], RightArm: [18, 0, 8], LeftForeArm: [10, 0, 0], RightForeArm: [20, 0, 0],
+    Spine: [3, -6, 0], LeftArm: [17, 0, 150], RightArm: [20, 0, 25], LeftForeArm: [10, 0, 0], RightForeArm: [20, 0, 0],
     LeftUpLeg: [22, 0, 0], LeftLeg: [12, 0, 0], RightUpLeg: [-14, 0, 0], RightLeg: [6, 0, 0],
   },
   wave: {
-    Neck: [0, -10, 0], LeftArm: [0, 0, 8], LeftForeArm: [10, 0, 0], RightArm: [0, 0, 80], RightForeArm: [0, 0, 75],
+    Neck: [0, -10, 0], LeftArm: [8, 0, 90], LeftForeArm: [10, 0, 0], RightArm: [80, 0, 90], RightForeArm: [0, 0, 75],
   },
+  cheer: { Neck: [-15, 0, 0], Head: [-10, 0, 0], LeftArm: [8, 0, 90], LeftForeArm: [10, 0, 0], RightArm: [175, 0, 80] },
 };
 // Eltern vor Kindern, damit jeder Knochen auf der schon gedrehten Lage seines Elternteils aufsetzt.
 const POSE_ORDER = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftArm', 'RightArm', 'LeftForeArm', 'RightForeArm',
@@ -236,7 +238,7 @@ export class RigStage {
       const [x, y, z] = pose[name].map(rad);
       const side = name.startsWith('Left') ? 1 : -1;
       if (/^(Hips|Spine\d?|Neck|Head)$/.test(name)) this.turn(name, x, y, -z);
-      else if (/^(Left|Right)Arm$/.test(name)) this.turn(name, -x, y, this.toArm(name, z));
+      else if (/^(Left|Right)Arm$/.test(name)) this.aim(name, x, y, z, side);
       else if (/^(Left|Right)Leg$/.test(name)) this.turn(name, x, y, side * z);
       else this.turn(name, -x, y, side * z);
     }
@@ -262,14 +264,30 @@ export class RigStage {
   }
 
   private turn(name: string, x = 0, y = 0, z = 0) {
+    const a = this.amplitude;
+    this.turnBy(name, new THREE.Quaternion().setFromEuler(new THREE.Euler(x * a, y * a, z * a)));
+  }
+
+  // Den Knochen in der Szene um world drehen, ausgehend von seiner Grundhaltung auf dem (schon gedrehten) Elternteil.
+  private turnBy(name: string, world: THREE.Quaternion) {
     const bone = this.find(name);
     if (!bone || !bone.parent) return;
     bone.parent.updateWorldMatrix(true, false);
     const parent = bone.parent.getWorldQuaternion(new THREE.Quaternion());
     const restWorld = parent.clone().multiply(this.rest.get(bone)!);
-    const a = this.amplitude;
-    const world = new THREE.Quaternion().setFromEuler(new THREE.Euler(x * a, y * a, z * a));
-    bone.quaternion.copy(parent.invert().multiply(world.multiply(restWorld)));
+    bone.quaternion.copy(parent.invert().multiply(world.clone().multiply(restWorld)));
+  }
+
+  // Einen Oberarm in eine Richtung zeigen lassen: erst hängt er (aus T- oder A-Pose heruntergeklappt), dann geht er um
+  // lift nach oben, zur Seite toward (0 vorn, 90 außen, 180 hinten) und dreht sich um sich selbst um twist (Bogenmaß).
+  // Eine Richtung statt zweier Drehungen hintereinander: so kommt „Arm senkrecht hoch“ auch dort an.
+  private aim(name: string, lift: number, twist: number, toward: number, side: number) {
+    const hang = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, this.toArm(name, 0)));
+    const down = new THREE.Vector3(0, -1, 0);
+    const to = new THREE.Vector3(side * Math.sin(lift) * Math.sin(toward), -Math.cos(lift), Math.sin(lift) * Math.cos(toward));
+    const raise = new THREE.Quaternion().setFromUnitVectors(down, to.normalize());
+    const spin = new THREE.Quaternion().setFromAxisAngle(to, twist);
+    this.turnBy(name, spin.multiply(raise).multiply(hang));
   }
 
   private play(clip: Clip, t: number) {
