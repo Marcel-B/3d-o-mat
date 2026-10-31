@@ -40,7 +40,7 @@ LeftForeArm, RightForeArm: x = Ellbogen beugen (0 = gestreckt bis 140);
   z = Unterarm nach außen und oben schwenken (bei waagrecht abgespreiztem Oberarm: 90 = Unterarm zeigt nach oben).
 LeftUpLeg, RightUpLeg: x = Bein nach vorn heben (negativ = nach hinten), z = nach außen spreizen.
 LeftLeg, RightLeg: x = Knie beugen (0 bis 140). LeftFoot, RightFoot: x = Zehen heben.
-Finger und Hände gibt es nicht; eine Faust oder Handhaltung lässt du weg und erwähnst das in note.
+LeftFist, RightFist: [wie fest, 0, 0], 0 = Hand offen, 100 = geschlossene Faust. Andere Handhaltungen gibt es nicht.
 Links und rechts sind aus Sicht der Figur. Lass Knochen weg, die gerade bleiben. Bleib in natürlichen Grenzen, damit
 die Figur nicht knickt. Für den 3D-Druck sind ruhige Haltungen mit Armen nah am Körper und beiden Füßen am Boden am
 besten; folge aber der Beschreibung.
@@ -49,12 +49,14 @@ Beispiel „lässig stehen“: {"pose": {"Spine": [0, 5, 3], "Neck": [3, -8, 0],
 "LeftLeg": [14, 0, 0], "RightUpLeg": [0, 0, 3]}, "note": "…"}
 Beispiel „rechter Arm gerade nach oben, schaut hoch“: {"pose": {"RightArm": [175, 0, 80], "Neck": [-15, 0, 0],
 "Head": [-10, 0, 0], "LeftArm": [8, 0, 90]}, "note": "…"}
+Beispiel „rechte Faust zum Himmel“: {"pose": {"RightArm": [175, 0, 80], "RightFist": [100, 0, 0], "Neck": [-10, 0, 0],
+"LeftArm": [8, 0, 90]}, "note": "…"}
 Beispiel „winkt mit links“: {"pose": {"LeftArm": [80, 0, 90], "LeftForeArm": [0, 0, 75], "RightArm": [8, 0, 90],
 "Neck": [0, 10, 0]}, "note": "…"}
 Antworte nur mit JSON: {"pose": {"<Knochen>": [x, y, z], …}, "note": "<ein kurzer Satz auf {sprache}, was du gestellt hast>"}"""
 
 POSE_BONES = ("Hips", "Spine", "Spine1", "Spine2", "Neck", "Head", "LeftArm", "RightArm", "LeftForeArm", "RightForeArm",
-              "LeftUpLeg", "RightUpLeg", "LeftLeg", "RightLeg", "LeftFoot", "RightFoot")
+              "LeftUpLeg", "RightUpLeg", "LeftLeg", "RightLeg", "LeftFoot", "RightFoot", "LeftFist", "RightFist")
 
 # Die Oberfläche gibt es auf Deutsch und Englisch; Gemma antwortet in ihrer Sprache. Die Bild-Prompts bleiben englisch.
 LANGUAGES = {"de": "Deutsch", "en": "Englisch"}

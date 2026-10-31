@@ -25,6 +25,8 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
   // Was die Schieber je Knochen eingestellt haben, damit ein Wechsel des Knochens nichts verliert.
   const turned = useRef(new Map<number, [number, number, number]>());
   const [pose, setPose] = useState<PoseName | null>(null);
+  // Wie fest die Fäuste sind (0 bis 100), links und rechts; nur mit Fingerknochen.
+  const [fists, setFists] = useState<[number, number]>([0, 0]);
   const [describe, setDescribe] = useState('');
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -61,7 +63,7 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
   function play(next: Clip) {
     const value = clip === next ? null : next;
     setClip(value);
-    setAngles([0, 0, 0]); turned.current.clear(); setPose(null); setNote(null);
+    setAngles([0, 0, 0]); turned.current.clear(); setPose(null); setNote(null); setFists([0, 0]);
     stage.current?.setClip(value);
   }
 
@@ -80,14 +82,23 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
   }
 
   function reset() {
-    setClip(null); setAngles([0, 0, 0]); turned.current.clear(); setPose(null); setNote(null);
+    setClip(null); setAngles([0, 0, 0]); turned.current.clear(); setPose(null); setNote(null); setFists([0, 0]);
     stage.current?.setClip(null);
+  }
+
+  function clench(side: 0 | 1, value: number) {
+    const next = [...fists] as [number, number];
+    next[side] = value;
+    setFists(next);
+    setClip(null);
+    stage.current?.setFist(side ? 'Right' : 'Left', value / 100);
   }
 
   // Eine fertige Haltung oder eine von Gemma; die Schieber fangen danach wieder bei 0 an.
   function hold(name: PoseName | null, angles = name ? POSES[name] : null) {
     if (!angles) return;
     setClip(null); setAngles([0, 0, 0]); turned.current.clear(); setPose(name);
+    setFists([angles.LeftFist?.[0] ?? 0, angles.RightFist?.[0] ?? 0]);
     stage.current?.applyPose(angles);
   }
 
@@ -153,6 +164,16 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
                 onChange={e => setDescribe(e.target.value)} />
               <button type="submit" disabled={asking || !describe.trim()}>{asking ? t.asking : t.ask}</button>
             </form>
+            {facts.fingers > 0 && (
+              <div className="row tight">
+                {([t.fistLeft, t.fistRight] as const).map((label, side) => (
+                  <label key={label} className="small muted amp">{label}
+                    <input id={`rig-fist-${side}`} type="range" min={0} max={100} step={5} value={fists[side]}
+                      onChange={e => clench(side as 0 | 1, Number(e.target.value))} />
+                  </label>
+                ))}
+              </div>
+            )}
             {note && <div className="small muted">{note}</div>}
             {poseError && <div className="error">{poseError}</div>}
             <div className="small muted">{t.poseHint}</div>
