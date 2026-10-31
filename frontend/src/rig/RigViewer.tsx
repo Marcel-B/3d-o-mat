@@ -4,7 +4,7 @@ import { POSES, RigStage, type Clip, type Facts, type PoseName } from './stage';
 import { PrintPanel } from '../components/PrintPanel';
 import { useLang } from '../i18n';
 
-const order: Clip[] = ['walk', 'punch', 'kick', 'arms', 'squat', 'fall'];
+const order: Clip[] = ['walk', 'punch', 'kick', 'roundhouse', 'arms', 'squat', 'fall'];
 const poses = Object.keys(POSES) as PoseName[];
 
 // Ein GLB mit Skelett ansehen und bewegen: Proben, Knochen von Hand, Skelett und Drahtgitter.

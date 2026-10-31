@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-export type Clip = 'walk' | 'punch' | 'kick' | 'arms' | 'squat' | 'fall';
+export type Clip = 'walk' | 'punch' | 'kick' | 'roundhouse' | 'arms' | 'squat' | 'fall';
 export type Track = { node: number; path: 'rotation' | 'translation'; values: number[] };
 export type Baked = { name: string; times: number[]; tracks: Track[] };
 // Eine Haltung in Grad je Knochen, [x, y, z] in Worten statt Achsen (wie Gemma sie schreibt, omat3d/assist.py):
@@ -47,10 +47,30 @@ const CORE = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftShoulder
 
 // 0 bis 1 weich, außerhalb festgehalten.
 const ease = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+// 0 bis 1, schnell los und weich am Ziel: für Stöße, die Wucht haben sollen.
+const snapOut = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : 1 - (1 - x) ** 3);
+// Ein kurzer Ausschlag über das Ziel hinaus, um at herum, width breit (0 bis 1 bis 0).
+const bump = (x: number, at: number, width: number) => ease((x - at + width) / width) * (1 - ease((x - at) / width));
+
+// Umfallen wie ein Körper, der um die Fersen kippt: Winkel über der Zeit aus θ'' = k·sin θ (k = 3g / 2L bei 1,8 m),
+// ab einem kleinen Anstoß, bis er bei FALL_ANGLE am Boden ist. Einmal vorausgerechnet, 600 Schritte je Sekunde.
+const FALL_ANGLE = (Math.PI / 2) * 0.93;
+const FALL: number[] = (() => {
+  const k = (3 * 9.81) / (2 * 1.8), dt = 1 / 600;
+  const out = [0.04];
+  let angle = 0.04, speed = 0.5;
+  while (angle < FALL_ANGLE) {
+    speed += k * Math.sin(angle) * dt;
+    angle += speed * dt;
+    out.push(Math.min(angle, FALL_ANGLE));
+  }
+  return out;
+})();
+const FALL_SECONDS = FALL.length / 600;
 
 // Eine Runde jeder Probe in Sekunden, für den Export als Schleife.
 export const PERIODS: Record<Clip, number> = {
-  walk: (2 * Math.PI) / 5, punch: 1.4, kick: 1.8, arms: Math.PI, squat: (2 * Math.PI) / 2.4, fall: 4.5,
+  walk: (2 * Math.PI) / 5, punch: 1.2, kick: 1.6, roundhouse: 2, arms: Math.PI, squat: (2 * Math.PI) / 2.4, fall: 5,
 };
 
 export class RigStage {
@@ -72,6 +92,9 @@ export class RigStage {
   private rootPosition = new THREE.Vector3();
   private rootQuaternion = new THREE.Quaternion();
   private heel = 0;
+  // Wie hoch der tiefste Knochen in der Grundhaltung über dem Boden liegt (Knöchel, Zehen); beim Liegen ist es der
+  // Rücken, der dann ebenso hoch über dem Boden bleibt.
+  private floor = 0;
   // Welcher Knoten des GLB zu welchem Knochen gehört, für den Export der Proben.
   private nodes = new Map<THREE.Bone, number>();
   private armAngle: Record<string, number> = { LeftArm: Math.PI / 2, RightArm: -Math.PI / 2 };
@@ -146,6 +169,8 @@ export class RigStage {
     this.restPosition.clear();
     this.bones.forEach(bone => this.restPosition.set(bone, bone.position.clone()));
     this.measureLegs();
+    this.floor = this.lowestBone();
+    this.measureFingers();
     this.nodes.clear();
     this.bones.forEach(bone => {
       const node = gltf.parser.associations.get(bone)?.nodes;
@@ -308,37 +333,100 @@ export class RigStage {
       // Steht das Bein mit dem gestreckteren Knie am Boden: daraus die Hüfthöhe.
       this.sink(Math.min(this.legDrop(-stride * s, leftKnee), this.legDrop(stride * s, rightKnee)));
     } else if (clip === 'punch') {
-      // Deckung wie beim Boxen: Ellbogen unten, Unterarme hoch, Fäuste vor dem Kinn. Der rechte Arm stößt gerade
-      // nach vorn zur Mitte, die Schultern drehen mit, das Gewicht geht leicht nach vorn; der linke bleibt oben.
-      const c = (t % 1.4) / 1.4;
-      const p = ease(c / 0.18) * (1 - ease((c - 0.32) / 0.3));
-      turn('Spine', 0.08 + 0.08 * p, 0.3 * p); turn('Spine1', 0, 0.15 * p); turn('Neck', 0, -0.3 * p);
+      // Deckung wie beim Boxen, dann ein gerader Rechter: kurz ausholen (Schultern und Hüfte drehen weg, Knie
+      // federn ein), dann schnellt der Arm aus der Hüfte heraus nach vorn, schießt ein wenig über, bleibt einen
+      // Moment stehen und kommt zurück in die Deckung. Das Gewicht geht dabei auf das vordere (linke) Bein.
+      const c = (t % 1.2) / 1.2;
+      const wind = ease(c / 0.2) * (1 - ease((c - 0.2) / 0.07));
+      const p = snapOut((c - 0.22) / 0.08) * (1 - ease((c - 0.42) / 0.3)) + 0.12 * bump(c, 0.31, 0.04);
+      turn('Hips', 0, -0.12 * wind + 0.22 * p);
+      turn('Spine', 0.08 + 0.14 * p, -0.25 * wind + 0.35 * p); turn('Spine1', 0, 0.2 * p);
+      turn('Neck', 0.04 * p, 0.3 * wind - 0.55 * p);
       // Y dreht einen nach vorn zeigenden Arm: positiv nach links, also beim rechten Arm zur Mitte.
-      turn('LeftArm', -0.55, -0.25, toArm('LeftArm', 0.25)); turn('LeftForeArm', -2.2);
-      turn('RightArm', -0.55 - 1.0 * p, 0.25 + 0.25 * p, toArm('RightArm', 0.25 - 0.4 * p));
-      turn('RightForeArm', -2.2 * (1 - p));
-      turn('LeftUpLeg', -0.15); turn('LeftLeg', 0.2); turn('RightUpLeg', 0.1); turn('RightLeg', 0.15);
-      turn('LeftFoot', -0.05); turn('RightFoot', -0.25);
-      this.sink(Math.min(this.legDrop(-0.15, 0.2), this.legDrop(0.1, 0.15)));
+      turn('LeftArm', -0.55 - 0.1 * p, -0.25, toArm('LeftArm', 0.25)); turn('LeftForeArm', -2.3);
+      turn('RightArm', -0.55 + 0.2 * wind - 0.85 * p, 0.25 + 0.25 * p, toArm('RightArm', 0.25 + 0.1 * wind - 0.4 * p));
+      turn('RightForeArm', -2.2 * (1 - p) - 0.25 * wind);
+      const [leftHip, leftKnee] = [-0.15 - 0.12 * p, 0.2 + 0.2 * wind + 0.15 * p];
+      const [rightHip, rightKnee] = [0.1 + 0.12 * p, 0.15 + 0.2 * wind];
+      turn('LeftUpLeg', leftHip); turn('LeftLeg', leftKnee); turn('RightUpLeg', rightHip); turn('RightLeg', rightKnee);
+      turn('LeftFoot', -0.85 * (leftHip + leftKnee)); turn('RightFoot', -0.25 - 0.25 * p);
+      this.fist('Left', 1); this.fist('Right', 1);
+      this.sink(Math.min(this.legDrop(leftHip, leftKnee), this.legDrop(rightHip, rightKnee)));
     } else if (clip === 'kick') {
-      // Knie anziehen, Unterschenkel vorschnellen, zurück; das Standbein gibt etwas nach, die Arme halten Balance.
-      const c = (t % 1.8) / 1.8;
-      const up = ease(c / 0.3) * (1 - ease((c - 0.62) / 0.3));
-      const snap = ease((c - 0.3) / 0.1) * (1 - ease((c - 0.48) / 0.14));
-      turn('Spine', -0.25 * up);
-      turn('RightUpLeg', -1.45 * up); turn('RightLeg', 1.9 * up * (1 - snap)); turn('RightFoot', 0.5 * snap);
-      turn('LeftLeg', 0.2 * up); turn('LeftUpLeg', -0.1 * up);
-      this.sink(this.legDrop(-0.1 * up, 0.2 * up));
-      turn('LeftArm', -0.5 * up, 0, toArm('LeftArm', 0.5 * up + 0.2)); turn('RightArm', 0.4 * up, 0, toArm('RightArm', 0.6 * up + 0.2));
-      turn('LeftForeArm', -0.9 * up); turn('RightForeArm', -0.5 * up);
+      // Vorwärtstritt: Knie hoch an die Brust ziehen, dann schnellt der Unterschenkel vor und die Hüfte schiebt nach,
+      // der Oberkörper lehnt sich als Gegengewicht zurück; kurz stehen, Knie zurück, Fuß absetzen. Die Arme bleiben
+      // in der Deckung, der rechte schwingt beim Tritt nach hinten.
+      const c = (t % 1.6) / 1.6;
+      const up = ease(c / 0.22) * (1 - ease((c - 0.6) / 0.25));
+      const snap = snapOut((c - 0.26) / 0.06) * (1 - ease((c - 0.42) / 0.12)) + 0.1 * bump(c, 0.33, 0.04);
+      turn('Hips', -0.12 * snap);
+      turn('Spine', -0.3 * up - 0.2 * snap); turn('Neck', 0.2 * up + 0.15 * snap);
+      turn('RightUpLeg', -1.65 * up - 0.25 * snap); turn('RightLeg', 2.2 * up * (1 - snap)); turn('RightFoot', 0.5 * snap);
+      const [hip, knee] = [-0.12 * up, 0.3 * up];
+      turn('LeftUpLeg', hip); turn('LeftLeg', knee); turn('LeftFoot', -0.85 * (hip + knee));
+      this.sink(this.legDrop(hip, knee));
+      turn('LeftArm', -0.6 * up, 0, toArm('LeftArm', 0.35 * up + 0.2)); turn('LeftForeArm', -1.8 * up);
+      turn('RightArm', 0.3 * up + 0.45 * snap, 0, toArm('RightArm', 0.45 * up + 0.2)); turn('RightForeArm', -1.2 * up + 0.6 * snap);
+      this.fist('Left', up); this.fist('Right', up);
+    } else if (clip === 'roundhouse') {
+      // Drehtritt mit rechts: das Knie kommt vorn hoch, dann dreht die Figur auf dem linken Fuß gut eine Vierteldrehung
+      // ein, der Oberschenkel klappt dabei zur Seite bis waagrecht (die Hüfte dreht über), und der Unterschenkel peitscht
+      // im Bogen nach vorn durch. Oberkörper kippt als Gegengewicht weg, Blick und Fäuste bleiben beim Ziel. Zurück:
+      // Knie wieder anziehen, zurückdrehen, absetzen.
+      const c = (t % 2) / 2;
+      const back = ease((c - 0.56) / 0.3);
+      const up = ease(c / 0.16) * (1 - back);
+      const over = ease((c - 0.1) / 0.18) * (1 - ease((c - 0.6) / 0.22));
+      const snap = snapOut((c - 0.3) / 0.07) * (1 - ease((c - 0.46) / 0.12)) + 0.1 * bump(c, 0.37, 0.04);
+      const a = this.amplitude;
+      const q = (x: number, y: number, z: number) => new THREE.Quaternion().setFromEuler(new THREE.Euler(x * a, y * a, z * a));
+      // Drehungen im Raum eines schon gedrehten Körperteils statt im Raum der Szene, damit Bein und Arme mitdrehen.
+      const within = (frame: THREE.Quaternion, name: string, rot: THREE.Quaternion) =>
+        this.turnBy(name, frame.clone().multiply(rot).multiply(frame.clone().invert()));
+      const spin = 1.6 * over + 0.3 * snap;
+      const hips = q(0, spin, 0);
+      turn('Hips', 0, spin);
+      const [hip, knee] = [-0.12 * up, 0.35 * up];
+      within(hips, 'LeftUpLeg', q(hip, 0, 0)); within(hips, 'LeftLeg', q(knee, 0, 0));
+      within(hips, 'LeftFoot', q(-0.85 * (hip + knee), 0, 0));
+      this.sink(this.legDrop(hip, knee));
+      const thighRot = q(-1.5 * up * (1 - over) - 0.35 * up * over, 0, -1.45 * up * over);
+      within(hips, 'RightUpLeg', thighRot);
+      const thigh = hips.clone().multiply(thighRot);
+      const kneeRot = q(2.3 * up * (1 - snap), 0, 0);
+      within(thigh, 'RightLeg', kneeRot);
+      within(thigh.clone().multiply(kneeRot), 'RightFoot', q(0.6 * up, 0, 0));
+      const chest = hips.clone().multiply(q(0, -0.6 * over, 0));
+      within(hips, 'Spine', q(-0.1 * up, -0.6 * over, -0.45 * over));
+      within(chest, 'Neck', q(0, -0.6 * over - 0.15 * snap, 0.3 * over));
+      within(chest, 'LeftArm', q(-0.7 * up, 0, toArm('LeftArm', 0.3 * up + 0.2))); within(chest, 'LeftForeArm', q(-1.9 * up, 0, 0));
+      within(chest, 'RightArm', q(0.2 * up + 0.5 * snap, 0, toArm('RightArm', 0.6 * up + 0.2)));
+      within(chest, 'RightForeArm', q(-1.4 * up + 0.5 * snap, 0, 0));
+      this.fist('Left', up); this.fist('Right', up);
     } else if (clip === 'fall') {
-      // Nach hinten umfallen wie ein Brett: mit der Schwerkraft schneller werdend, liegen bleiben, wieder aufstehen.
-      const c = t % 4.5;
-      const f = c < 1 ? c * c : c < 3.2 ? 1 : 1 - ease((c - 3.2) / 1.1);
-      turn('Neck', 0.35 * f); turn('Spine', 0.15 * f);
-      turn('LeftArm', 0, 0, toArm('LeftArm', 0.2 + 1.1 * f)); turn('RightArm', 0, 0, toArm('RightArm', 0.2 + 1.1 * f));
-      turn('LeftUpLeg', -0.25 * f); turn('RightUpLeg', -0.1 * f); turn('LeftLeg', 0.35 * f); turn('RightLeg', 0.15 * f);
-      this.tilt(-(Math.PI / 2) * 0.93 * f);
+      // Nach hinten umfallen: die Knie geben nach, der Körper kippt mit der Schwerkraft immer schneller (siehe FALL),
+      // knickt dabei in der Hüfte, der Kopf zieht zur Brust, die Arme reißen nach hinten und außen. Beim Aufprall
+      // federt er kurz zurück, Kopf und Arme schlagen nach, dann liegt er; nach einer Weile steht er wieder auf.
+      const c = t % 5;
+      const start = 0.25, landed = start + FALL_SECONDS;
+      const buckle = ease(c / start);
+      const falling = c < start ? 0 : c < landed ? FALL[Math.min(FALL.length - 1, Math.floor((c - start) * 600))] : FALL_ANGLE;
+      const after = Math.max(0, c - landed);
+      const rebound = c >= landed ? 0.07 * Math.abs(Math.sin(after * Math.PI / 0.16)) * Math.exp(-after * 9) : 0;
+      const up = 1 - ease((c - 3.7) / 1.1);
+      const f = falling / FALL_ANGLE;
+      const hit = c >= landed ? Math.exp(-after * 7) : 0;
+      const lying = c >= landed ? ease(after / 0.4) : 0;
+      turn('Spine', (0.12 * buckle + 0.25 * f - 0.15 * lying) * up); turn('Neck', (0.15 * buckle + 0.45 * f - 0.5 * hit) * up);
+      const arm = (0.25 + 0.9 * f + 0.35 * lying) * up;
+      turn('LeftArm', 0.5 * f * (1 - lying) * up, 0, toArm('LeftArm', arm)); turn('RightArm', 0.5 * f * (1 - lying) * up, 0, toArm('RightArm', arm));
+      turn('LeftForeArm', -0.4 * f * (1 - lying) * up); turn('RightForeArm', -0.3 * f * (1 - lying) * up);
+      // Die Knie geben nach, beim Kippen strecken sich die Beine wieder (wer nach hinten fällt, wird steif), am Boden
+      // winkeln sie sich leicht an. Danach liegt der tiefste Knochen so hoch wie im Stand: kein Schweben, kein Einsinken.
+      const bend = (0.3 * buckle * (1 - f) + 0.08 * f + 0.25 * lying) * up;
+      turn('LeftUpLeg', -0.7 * bend); turn('RightUpLeg', -0.5 * bend); turn('LeftLeg', 1.3 * bend); turn('RightLeg', 0.9 * bend);
+      this.tilt(-(falling - rebound) * up);
+      this.settle();
     } else if (clip === 'arms') {
       const lift = 0.2 + ((1 - Math.cos(t * 2)) / 2) * 1.7;
       turn('LeftArm', 0, 0, toArm('LeftArm', lift)); turn('RightArm', 0, 0, toArm('RightArm', lift));
@@ -354,6 +442,57 @@ export class RigStage {
   }
 
   // Kippt die ganze Figur um die X-Achse durch die Fersen. Nach den Knochen, damit turn() noch die stehende Figur sah.
+  // Fingerknochen (Mixamo: Daumen, Zeige- bis kleiner Finger, je drei Glieder) und die Achse, um die jedes Glied zur
+  // Faust einrollt. In der Grundhaltung zeigen die Handflächen nach unten; ein Glied rollt also von seiner Richtung
+  // nach unten ein. Die Achse wird im Raum der Hand gemerkt, damit sie mitgeht, wenn der Arm sich bewegt.
+  private fingers: { bone: THREE.Bone; hand: THREE.Bone; axis: THREE.Vector3; thumb: boolean; side: string }[] = [];
+
+  private measureFingers() {
+    this.fingers = [];
+    this.root?.updateMatrixWorld(true);
+    const down = new THREE.Vector3(0, -1, 0);
+    for (const bone of this.bones) {
+      const match = /^(Left|Right)Hand(Thumb|Index|Middle|Ring|Pinky)[123]$/.exec(bone.name.replace(/^mixamorig[:_]?/i, ''));
+      const hand = match && this.find(`${match[1]}Hand`);
+      const child = bone.children.find(c => (c as THREE.Bone).isBone);
+      if (!match || !hand || !child) continue;
+      const along = child.getWorldPosition(new THREE.Vector3()).sub(bone.getWorldPosition(new THREE.Vector3())).normalize();
+      // Der Daumen legt sich quer über die Finger: er dreht zum Mittelfinger hin statt nach unten.
+      const middle = this.find(`${match[1]}HandMiddle2`);
+      const toward = match[2] === 'Thumb' && middle
+        ? middle.getWorldPosition(new THREE.Vector3()).sub(bone.getWorldPosition(new THREE.Vector3())).normalize() : down;
+      const axis = along.clone().cross(toward);
+      if (axis.lengthSq() < 1e-4) continue;
+      axis.normalize().applyQuaternion(hand.getWorldQuaternion(new THREE.Quaternion()).invert());
+      this.fingers.push({ bone, hand, axis, thumb: match[2] === 'Thumb', side: match[1] });
+    }
+    // Vom Handgelenk zu den Spitzen, damit jedes Glied auf dem schon eingerollten aufsetzt.
+    const depth = (b: THREE.Object3D): number => (b.parent ? 1 + depth(b.parent) : 0);
+    this.fingers.sort((a, b) => depth(a.bone) - depth(b.bone));
+  }
+
+  // Die Finger einer Hand zur Faust schließen (amount 0 bis 1); ohne Fingerknochen tut das nichts.
+  private fist(side: 'Left' | 'Right', amount: number) {
+    for (const { bone, hand, axis, thumb, side: which } of this.fingers) {
+      if (which !== side || amount <= 0) continue;
+      const world = axis.clone().applyQuaternion(hand.getWorldQuaternion(new THREE.Quaternion()));
+      const name = bone.name.replace(/^mixamorig[:_]?/i, '');
+      this.turnBy(name, new THREE.Quaternion().setFromAxisAngle(world, amount * (thumb ? 0.7 : 1.35)));
+    }
+  }
+
+  private lowestBone() {
+    this.root?.updateMatrixWorld(true);
+    const at = new THREE.Vector3();
+    return this.bones.reduce((low, bone) => Math.min(low, bone.getWorldPosition(at).y), Infinity);
+  }
+
+  // Die ganze Figur so heben oder senken, dass ihr tiefster Knochen so hoch liegt wie in der Grundhaltung.
+  private settle() {
+    if (!this.root || !Number.isFinite(this.floor)) return;
+    this.root.position.y += this.floor - this.lowestBone();
+  }
+
   private tilt(angle: number) {
     if (!this.root) return;
     const turn = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), angle * this.amplitude);

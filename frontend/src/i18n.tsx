@@ -116,7 +116,7 @@ const de = {
 
   rig: {
     // Die Namen der Proben stehen auch als Animationen im GLB.
-    clips: { walk: 'Gehen', punch: 'Schlag', kick: 'Tritt', arms: 'Arme heben', squat: 'Kniebeuge', fall: 'Umfallen' },
+    clips: { walk: 'Gehen', punch: 'Schlag', kick: 'Tritt', roundhouse: 'Drehtritt', arms: 'Arme heben', squat: 'Kniebeuge', fall: 'Umfallen' },
     loadFailed: (message: string) => `Das Modell ließ sich nicht laden: ${message}`,
     exportFailed: (message: string) => `Export ging nicht: ${message}`,
     loading: 'Lädt das Modell mit Skelett …',
@@ -129,7 +129,7 @@ const de = {
     facts: (bones: number, points: string, core: string) => `${bones} Knochen · ${points} Punkte · Mixamo-Kern ${core}`,
     packing: 'Packt …',
     download: 'GLB mit Proben herunterladen',
-    downloadHint: 'Die sechs Proben als Animationen (30 Bilder je Sekunde, Stärke wie eingestellt), in Godot im AnimationPlayer.',
+    downloadHint: 'Die sieben Proben als Animationen (30 Bilder je Sekunde, Stärke wie eingestellt), in Godot im AnimationPlayer.',
     missing: (names: string) => `Ohne Mixamo-Namen: ${names}. Proben bewegen diese Teile nicht.`,
     pose: 'Haltung',
     poses: { down: 'Arme runter', relaxed: 'Lässig stehen', hero: 'Heldenpose', stride: 'Schritt', wave: 'Winken', cheer: 'Arm hoch' },
@@ -282,7 +282,7 @@ const en: Texts = {
   },
 
   rig: {
-    clips: { walk: 'Walk', punch: 'Punch', kick: 'Kick', arms: 'Raise arms', squat: 'Squat', fall: 'Fall over' },
+    clips: { walk: 'Walk', punch: 'Punch', kick: 'Kick', roundhouse: 'Roundhouse kick', arms: 'Raise arms', squat: 'Squat', fall: 'Fall over' },
     loadFailed: (message: string) => `The model could not be loaded: ${message}`,
     exportFailed: (message: string) => `Export failed: ${message}`,
     loading: 'Loading the model with skeleton …',
@@ -295,7 +295,7 @@ const en: Texts = {
     facts: (bones: number, points: string, core: string) => `${bones} bones · ${points} vertices · Mixamo core ${core}`,
     packing: 'Packing …',
     download: 'Download GLB with test moves',
-    downloadHint: 'The six test moves as animations (30 frames per second, at the strength set), in Godot in the AnimationPlayer.',
+    downloadHint: 'The seven test moves as animations (30 frames per second, at the strength set), in Godot in the AnimationPlayer.',
     missing: (names: string) => `Without Mixamo names: ${names}. The test moves do not move these parts.`,
     pose: 'Pose',
     poses: { down: 'Arms down', relaxed: 'Relaxed', hero: 'Hero pose', stride: 'Stride', wave: 'Wave', cheer: 'Arm up' },
