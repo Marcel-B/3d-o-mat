@@ -26,7 +26,7 @@ macOS' eigenes `/usr/bin/python3` (3.9) reicht für die App nicht, sie braucht m
 
 ```sh
 git clone https://github.com/Marcel-B/3d-o-mat.git ~/repos/3d-o-mat && cd ~/repos/3d-o-mat
-/opt/homebrew/opt/python@3.12/bin/python3.12 -m venv .venv
+python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt -r requirements-rembg.txt
 (cd frontend && npm ci && npm run build)
 ```
