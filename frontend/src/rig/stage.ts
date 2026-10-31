@@ -9,6 +9,34 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 export type Clip = 'walk' | 'punch' | 'kick' | 'arms' | 'squat' | 'fall';
 export type Track = { node: number; path: 'rotation' | 'translation'; values: number[] };
 export type Baked = { name: string; times: number[]; tracks: Track[] };
+// Eine Haltung in Grad je Knochen, [x, y, z] in Worten statt Achsen (wie Gemma sie schreibt, omat3d/assist.py):
+// Rumpf, Hals, Kopf: x nach vorn neigen, y nach links drehen, z zur linken Seite neigen. Oberarm: z abspreizen (0 hängt,
+// 90 waagrecht), x nach vorn heben. Unterarm: x Ellbogen beugen, z nach außen und oben. Oberschenkel: x nach vorn,
+// z nach außen. Knie: x beugen. Fuß: x Zehen heben. Links und rechts aus Sicht der Figur.
+export type Pose = Record<string, [number, number, number]>;
+export type PoseName = 'down' | 'relaxed' | 'hero' | 'stride' | 'wave';
+export const POSES: Record<PoseName, Pose> = {
+  down: { LeftArm: [0, 0, 6], RightArm: [0, 0, 6], LeftForeArm: [8, 0, 0], RightForeArm: [8, 0, 0] },
+  relaxed: {
+    Spine: [0, 5, 3], Neck: [3, -8, 0], LeftArm: [5, 0, 8], RightArm: [-5, 0, 10], LeftForeArm: [15, 0, 0],
+    RightForeArm: [10, 0, 0], LeftUpLeg: [8, 0, 2], LeftLeg: [14, 0, 0], RightUpLeg: [0, 0, 3],
+  },
+  hero: {
+    Spine: [-4, 0, 0], Spine2: [-4, 0, 0], Neck: [-4, 15, 0], LeftArm: [0, 0, 22], RightArm: [0, 0, 22],
+    LeftForeArm: [25, 0, 0], RightForeArm: [25, 0, 0], LeftUpLeg: [0, 0, 9], RightUpLeg: [0, 0, 9],
+  },
+  stride: {
+    Spine: [3, -6, 0], LeftArm: [-15, 0, 8], RightArm: [18, 0, 8], LeftForeArm: [10, 0, 0], RightForeArm: [20, 0, 0],
+    LeftUpLeg: [22, 0, 0], LeftLeg: [12, 0, 0], RightUpLeg: [-14, 0, 0], RightLeg: [6, 0, 0],
+  },
+  wave: {
+    Neck: [0, -10, 0], LeftArm: [0, 0, 8], LeftForeArm: [10, 0, 0], RightArm: [0, 0, 80], RightForeArm: [0, 0, 75],
+  },
+};
+// Eltern vor Kindern, damit jeder Knochen auf der schon gedrehten Lage seines Elternteils aufsetzt.
+const POSE_ORDER = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftArm', 'RightArm', 'LeftForeArm', 'RightForeArm',
+  'LeftUpLeg', 'RightUpLeg', 'LeftLeg', 'RightLeg', 'LeftFoot', 'RightFoot'];
+
 export type Facts = { bones: number; meshes: number; vertices: number; core: { name: string; found: boolean }[] };
 
 // Mixamo-Namen, wie skintokens sie mit --class humanoid vergibt (mit oder ohne "mixamorig:").
@@ -33,6 +61,8 @@ export class RigStage {
   private meshes: THREE.SkinnedMesh[] = [];
   private rest = new Map<THREE.Bone, THREE.Quaternion>();
   private restPosition = new Map<THREE.Bone, THREE.Vector3>();
+  // Die zuletzt gewählte Haltung; die Schieber drehen von ihr aus, nicht von der Grundhaltung.
+  private base = new Map<THREE.Bone, THREE.Quaternion>();
   // Ober- und Unterschenkel in Bühnenmaßen, damit die Hüfte so weit sinkt, dass das Standbein am Boden bleibt.
   private thigh = 0.4;
   private shin = 0.4;
@@ -105,7 +135,7 @@ export class RigStage {
     this.root = gltf.scene;
     this.scene.add(this.root);
     this.fit(this.root);
-    this.bones = []; this.meshes = []; this.rest.clear();
+    this.bones = []; this.meshes = []; this.rest.clear(); this.base.clear();
     this.root.traverse(object => {
       if ((object as THREE.Bone).isBone) this.bones.push(object as THREE.Bone);
       if ((object as THREE.SkinnedMesh).isSkinnedMesh) this.meshes.push(object as THREE.SkinnedMesh);
@@ -194,6 +224,43 @@ export class RigStage {
 
   // Die Figur schaut nach +Z (so liefert TRELLIS.2 sie). X: vor/zurück (positiv kippt nach vorn, was nach oben zeigt,
   // und nach hinten, was nach unten hängt), Y: um die Hochachse, Z: seitwärts.
+  // Eine Haltung (siehe Pose) aus der Grundhaltung heraus; danach stehen die Füße wieder auf dem Gitter.
+  applyPose(pose: Pose) {
+    this.clip = null;
+    this.resetPose();
+    const amplitude = this.amplitude;
+    this.amplitude = 1;
+    const rad = THREE.MathUtils.degToRad;
+    for (const name of POSE_ORDER) {
+      if (!pose[name]) continue;
+      const [x, y, z] = pose[name].map(rad);
+      const side = name.startsWith('Left') ? 1 : -1;
+      if (/^(Hips|Spine\d?|Neck|Head)$/.test(name)) this.turn(name, x, y, -z);
+      else if (/^(Left|Right)Arm$/.test(name)) this.turn(name, -x, y, this.toArm(name, z));
+      else if (/^(Left|Right)Leg$/.test(name)) this.turn(name, x, y, side * z);
+      else this.turn(name, -x, y, side * z);
+    }
+    this.amplitude = amplitude;
+    this.base = new Map(this.bones.map(bone => [bone, bone.quaternion.clone()]));
+    this.ground();
+  }
+
+  // Die Figur so heben oder senken, dass ihr tiefster Punkt (mit Skelett gerechnet) auf dem Gitter liegt.
+  ground() {
+    if (!this.root) return;
+    this.root.position.copy(this.rootPosition);
+    this.root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(this.root, true);
+    if (Number.isFinite(box.min.y)) this.root.position.y -= box.min.y;
+  }
+
+  // Die Drehung jedes Knochens, wie er gerade steht, für die Druckdatei: Index des Knotens im GLB -> x, y, z, w.
+  printPose(): Record<string, [number, number, number, number]> {
+    const pose: Record<string, [number, number, number, number]> = {};
+    for (const [bone, node] of this.nodes) pose[node] = [bone.quaternion.x, bone.quaternion.y, bone.quaternion.z, bone.quaternion.w];
+    return pose;
+  }
+
   private turn(name: string, x = 0, y = 0, z = 0) {
     const bone = this.find(name);
     if (!bone || !bone.parent) return;
@@ -282,6 +349,8 @@ export class RigStage {
   bake(clips: [Clip, string][], fps = 30): Baked[] {
     const playing = this.clip;
     this.clip = null;
+    const current = this.bones.map(bone => [bone.quaternion.clone(), bone.position.clone()] as const);
+    const placed = this.root?.position.clone();
     const top = this.bones.filter(bone => !(bone.parent as THREE.Bone | null)?.isBone && this.nodes.has(bone));
     const baked = clips.map(([clip, name]) => {
       const frames = Math.max(2, Math.round(PERIODS[clip] * fps));
@@ -315,11 +384,14 @@ export class RigStage {
       return { name, times, tracks };
     });
     this.resetPose();
+    this.bones.forEach((bone, i) => { bone.quaternion.copy(current[i][0]); bone.position.copy(current[i][1]); });
+    if (placed) this.root?.position.copy(placed);
     this.clip = playing;
     return baked;
   }
 
   setClip(clip: Clip | null) {
+    this.base.clear();
     this.resetPose();
     this.clip = clip;
     this.started = performance.now();
@@ -340,7 +412,8 @@ export class RigStage {
     if (!bone) return;
     this.clip = null;
     const [x, y, z] = degrees.map(THREE.MathUtils.degToRad);
-    bone.quaternion.copy(this.rest.get(bone)!).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z)));
+    const from = this.base.get(bone) ?? this.rest.get(bone)!;
+    bone.quaternion.copy(from).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z)));
   }
 
   showSkeleton(on: boolean) {

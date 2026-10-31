@@ -73,6 +73,12 @@ export type Painting = {
 
 export type Prompts = { idea: string; prompts: string[]; note: string };
 
+export type PoseAnswer = { text: string; pose: Record<string, [number, number, number]>; note: string };
+
+export type PrintOptions = { pose?: Record<string, [number, number, number, number]>; height: number; base: boolean; format: '3mf' | 'stl' };
+// Wie die Druckdatei entstand: closed = Teile verschmolzen, voxels = über ein Raster geschlossen.
+export type PrintInfo = { method: 'closed' | 'voxels'; triangles: number; volumeCm3: number; sizeMm: [number, number, number] };
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method };
   if (body instanceof FormData) init.body = body;
@@ -118,6 +124,20 @@ export const api = {
     const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? `${id}-proben.glb`;
     return { blob: await response.blob(), name };
   },
+  // Die Figur als Datei für den 3D-Drucker, in der Haltung, die der Viewer gerade zeigt.
+  printFile: async (id: string, options: PrintOptions) => {
+    const response = await fetch(`/api/jobs/${id}/print`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(options),
+    });
+    if (!response.ok) {
+      const json = await response.json().catch(() => ({}));
+      throw new Error(typeof json.detail === 'string' ? json.detail : `HTTP ${response.status}`);
+    }
+    const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? `${id}.${options.format}`;
+    const info = JSON.parse(response.headers.get('x-print-info') ?? 'null') as PrintInfo | null;
+    return { blob: await response.blob(), name, info };
+  },
+  pose: (text: string, lang: string) => call<PoseAnswer>('POST', '/api/pose', { text, lang }),
   cancelJob: (id: string) => call<Job>('POST', `/api/jobs/${id}/cancel`),
   deleteJob: (id: string) => call('DELETE', `/api/jobs/${id}`),
 };

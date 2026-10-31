@@ -131,6 +131,26 @@ const de = {
     download: 'GLB mit Proben herunterladen',
     downloadHint: 'Die sechs Proben als Animationen (30 Bilder je Sekunde, Stärke wie eingestellt), in Godot im AnimationPlayer.',
     missing: (names: string) => `Ohne Mixamo-Namen: ${names}. Proben bewegen diese Teile nicht.`,
+    pose: 'Haltung',
+    poses: { down: 'Arme runter', relaxed: 'Lässig stehen', hero: 'Heldenpose', stride: 'Schritt', wave: 'Winken' },
+    describe: 'Haltung beschreiben, z. B. „steht lässig, rechte Hand winkt“',
+    ask: 'Gemma stellt die Figur',
+    asking: 'Gemma überlegt …',
+    poseFailed: (message: string) => `Keine Haltung: ${message}`,
+    poseHint: 'Danach mit „Knochen von Hand drehen“ nachstellen. Die Füße bleiben auf dem Boden.',
+  },
+
+  print: {
+    title: 'Für den 3D-Druck',
+    height: 'Höhe (mm)',
+    base: 'Sockel',
+    download: 'Druckdatei herunterladen',
+    computing: 'Rechnet …',
+    failed: (message: string) => `Druckdatei ging nicht: ${message}`,
+    result: (size: string, volume: string, closed: boolean) =>
+      `${size} mm, ${volume} cm³ · ${closed ? 'Teile verschmolzen' : 'über ein Raster geschlossen'}, wasserdicht`,
+    hintPosed: 'Die Figur in der Haltung, die du gerade siehst, wasserdicht und auf Wunsch mit Sockel. 3MF für Bambu Studio, PrusaSlicer, OrcaSlicer, Cura. Nur Form, ohne Farben; Details aus der Textur fehlen.',
+    hint: 'Das Modell wasserdicht und auf Wunsch mit Sockel. 3MF für Bambu Studio, PrusaSlicer, OrcaSlicer, Cura. Nur Form, ohne Farben; Details aus der Textur fehlen.',
   },
 
   jobs: {
@@ -277,6 +297,26 @@ const en: Texts = {
     download: 'Download GLB with test moves',
     downloadHint: 'The six test moves as animations (30 frames per second, at the strength set), in Godot in the AnimationPlayer.',
     missing: (names: string) => `Without Mixamo names: ${names}. The test moves do not move these parts.`,
+    pose: 'Pose',
+    poses: { down: 'Arms down', relaxed: 'Relaxed', hero: 'Hero pose', stride: 'Stride', wave: 'Wave' },
+    describe: 'Describe a pose, e.g. “standing relaxed, right hand waving”',
+    ask: 'Let Gemma pose it',
+    asking: 'Gemma is thinking …',
+    poseFailed: (message: string) => `No pose: ${message}`,
+    poseHint: 'Then fine-tune with “Turn bones by hand”. The feet stay on the ground.',
+  },
+
+  print: {
+    title: 'For 3D printing',
+    height: 'Height (mm)',
+    base: 'Base',
+    download: 'Download print file',
+    computing: 'Computing …',
+    failed: (message: string) => `Print file failed: ${message}`,
+    result: (size: string, volume: string, closed: boolean) =>
+      `${size} mm, ${volume} cm³ · ${closed ? 'parts merged' : 'closed over a grid'}, watertight`,
+    hintPosed: 'The figure in the pose you see, watertight and with a base if you like. 3MF for Bambu Studio, PrusaSlicer, OrcaSlicer, Cura. Shape only, no colours; details from the texture are missing.',
+    hint: 'The model, watertight and with a base if you like. 3MF for Bambu Studio, PrusaSlicer, OrcaSlicer, Cura. Shape only, no colours; details from the texture are missing.',
   },
 
   jobs: {

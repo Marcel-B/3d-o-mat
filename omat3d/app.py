@@ -1,5 +1,6 @@
 """Die Website: eine JSON-Schnittstelle unter /api und die React-Oberfläche (frontend/dist) unter /. Dateien gehen über
 store.py auf die T7 von oi-o-mat; hier bleibt nur, was gerade im Speicher ist."""
+import json
 import re
 import threading
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ from .config import Config
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
 from .jobs import OPEN, Jobs
 from .paint import SIZES, Paintings
+from .printout import PrintError, make_print
 from .store import NotMounted, Store, StoreError, new_id
 
 MAX_UPLOAD = 40 * 1024 * 1024
@@ -57,6 +59,19 @@ class PaintRequest(BaseModel):
 class AnimatedRequest(BaseModel):
     """Die Proben als Keyframes, wie stage.ts bake() sie ausrechnet."""
     clips: list[dict] = Field(..., min_length=1, max_length=12)
+
+
+class PrintRequest(BaseModel):
+    """Druckdatei: pose sind die Drehungen der Knoten (Index -> x, y, z, w), wie der Viewer sie gerade zeigt."""
+    pose: dict[str, list[float]] | None = None
+    height: float = Field(120, ge=20, le=400)
+    base: bool = True
+    format: str = Field("3mf", pattern="^(3mf|stl)$")
+
+
+class PoseRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+    lang: str = Field("de", pattern="^(de|en)$")
 
 
 class PromptRequest(BaseModel):
@@ -313,6 +328,39 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
         return Response(data, media_type="model/gltf-binary",
                         headers={"content-disposition": f'attachment; filename="{name}-proben-{job_id}.glb"'})
+
+    # Die Druckdatei rechnet auf der CPU und braucht einige hundert MB; zwei auf einmal wären zu viel für den Container.
+    printing = threading.Lock()
+
+    @app.post("/api/jobs/{job_id}/print")
+    def print_file(job_id: str, request: PrintRequest):
+        doc = job(job_id)
+        if doc["state"] != "done":
+            raise HTTPException(409, "Noch kein Modell")
+        if request.pose and doc.get("kind") != "rig":
+            raise HTTPException(409, "Nur ein Modell mit Skelett hat eine Haltung")
+        name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
+        try:
+            glb = store.get("jobs", job_id, "model.glb")
+        except FileNotFoundError:
+            raise HTTPException(404, "Datei fehlt auf der T7") from None
+        with printing:
+            try:
+                data, info = make_print(glb, request.pose, request.height, request.base, request.format, name)
+            except PrintError as error:
+                raise HTTPException(422, str(error)) from error
+        media = "model/3mf" if request.format == "3mf" else "model/stl"
+        return Response(data, media_type=media, headers={
+            "content-disposition": f'attachment; filename="{name}-druck-{job_id}.{request.format}"',
+            "x-print-info": json.dumps(info),
+        })
+
+    @app.post("/api/pose")
+    def pose(request: PoseRequest):
+        try:
+            return assist.pose_from_text(gate, config.assist_model, request.text, request.lang)
+        except ValueError as error:
+            raise HTTPException(502, str(error)) from error
 
     if FRONTEND.is_dir():
         app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")
