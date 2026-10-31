@@ -369,20 +369,39 @@ export class RigStage {
       turn('RightArm', 0.3 * up + 0.45 * snap, 0, toArm('RightArm', 0.45 * up + 0.2)); turn('RightForeArm', -1.2 * up + 0.6 * snap);
       this.fist('Left', up); this.fist('Right', up);
     } else if (clip === 'roundhouse') {
-      // Drehtritt mit rechts: auf dem linken Fuß eindrehen, das rechte Knie seitlich hoch bis waagrecht anziehen, dann
-      // schnellt der Unterschenkel quer vor dem Körper durch, die Hüfte dreht über; der Oberkörper kippt als
-      // Gegengewicht zur anderen Seite, die Fäuste bleiben in der Deckung. Zurück auf demselben Weg.
+      // Drehtritt mit rechts: das Knie kommt vorn hoch, dann dreht die Figur auf dem linken Fuß gut eine Vierteldrehung
+      // ein, der Oberschenkel klappt dabei zur Seite bis waagrecht (die Hüfte dreht über), und der Unterschenkel peitscht
+      // im Bogen nach vorn durch. Oberkörper kippt als Gegengewicht weg, Blick und Fäuste bleiben beim Ziel. Zurück:
+      // Knie wieder anziehen, zurückdrehen, absetzen.
       const c = (t % 2) / 2;
-      const up = ease(c / 0.25) * (1 - ease((c - 0.6) / 0.25));
+      const back = ease((c - 0.56) / 0.3);
+      const up = ease(c / 0.16) * (1 - back);
+      const over = ease((c - 0.1) / 0.18) * (1 - ease((c - 0.6) / 0.22));
       const snap = snapOut((c - 0.3) / 0.07) * (1 - ease((c - 0.46) / 0.12)) + 0.1 * bump(c, 0.37, 0.04);
-      turn('Hips', 0, 1.1 * up + 0.35 * snap);
-      turn('Spine', -0.1 * up, -0.4 * up, -0.45 * up); turn('Neck', 0, -0.55 * up - 0.2 * snap, 0.3 * up);
-      turn('RightUpLeg', -1.3 * up, 0, -1.25 * up); turn('RightLeg', 2.1 * up * (1 - snap)); turn('RightFoot', 0.6 * up);
-      const [hip, knee] = [-0.1 * up, 0.3 * up];
-      turn('LeftUpLeg', hip); turn('LeftLeg', knee); turn('LeftFoot', -0.85 * (hip + knee));
+      const a = this.amplitude;
+      const q = (x: number, y: number, z: number) => new THREE.Quaternion().setFromEuler(new THREE.Euler(x * a, y * a, z * a));
+      // Drehungen im Raum eines schon gedrehten Körperteils statt im Raum der Szene, damit Bein und Arme mitdrehen.
+      const within = (frame: THREE.Quaternion, name: string, rot: THREE.Quaternion) =>
+        this.turnBy(name, frame.clone().multiply(rot).multiply(frame.clone().invert()));
+      const spin = 1.6 * over + 0.3 * snap;
+      const hips = q(0, spin, 0);
+      turn('Hips', 0, spin);
+      const [hip, knee] = [-0.12 * up, 0.35 * up];
+      within(hips, 'LeftUpLeg', q(hip, 0, 0)); within(hips, 'LeftLeg', q(knee, 0, 0));
+      within(hips, 'LeftFoot', q(-0.85 * (hip + knee), 0, 0));
       this.sink(this.legDrop(hip, knee));
-      turn('LeftArm', -0.7 * up, 0, toArm('LeftArm', 0.3 * up + 0.2)); turn('LeftForeArm', -1.9 * up);
-      turn('RightArm', 0.2 * up + 0.4 * snap, 0, toArm('RightArm', 0.6 * up + 0.2)); turn('RightForeArm', -1.4 * up + 0.5 * snap);
+      const thighRot = q(-1.5 * up * (1 - over) - 0.35 * up * over, 0, -1.45 * up * over);
+      within(hips, 'RightUpLeg', thighRot);
+      const thigh = hips.clone().multiply(thighRot);
+      const kneeRot = q(2.3 * up * (1 - snap), 0, 0);
+      within(thigh, 'RightLeg', kneeRot);
+      within(thigh.clone().multiply(kneeRot), 'RightFoot', q(0.6 * up, 0, 0));
+      const chest = hips.clone().multiply(q(0, -0.6 * over, 0));
+      within(hips, 'Spine', q(-0.1 * up, -0.6 * over, -0.45 * over));
+      within(chest, 'Neck', q(0, -0.6 * over - 0.15 * snap, 0.3 * over));
+      within(chest, 'LeftArm', q(-0.7 * up, 0, toArm('LeftArm', 0.3 * up + 0.2))); within(chest, 'LeftForeArm', q(-1.9 * up, 0, 0));
+      within(chest, 'RightArm', q(0.2 * up + 0.5 * snap, 0, toArm('RightArm', 0.6 * up + 0.2)));
+      within(chest, 'RightForeArm', q(-1.4 * up + 0.5 * snap, 0, 0));
       this.fist('Left', up); this.fist('Right', up);
     } else if (clip === 'fall') {
       // Nach hinten umfallen: die Knie geben nach, der Körper kippt mit der Schwerkraft immer schneller (siehe FALL),
