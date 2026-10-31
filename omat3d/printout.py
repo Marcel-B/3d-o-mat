@@ -24,8 +24,10 @@ from .animate import AnimationError, _chunks
 MIN_HEIGHT, MAX_HEIGHT = 20.0, 400.0
 FORMATS = ("3mf", "stl")
 # Höchstens so viele Voxel; bei größeren Figuren wird das Raster gröber.
-MAX_CELLS = 24_000_000
+MAX_CELLS = 30_000_000
 SINK = 0.5
+# So viele Dreiecke (die der nächsten Proben) prüft das Raster je Zelle für den genauen Abstand zur Oberfläche.
+NEAREST = 12
 
 COMPONENTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
 TYPES = {5120: np.int8, 5121: np.uint8, 5122: np.int16, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}
@@ -210,11 +212,48 @@ def _closed(points: np.ndarray, faces: np.ndarray):
     return manifold3d.Manifold.batch_boolean(pieces, manifold3d.OpType.Add) if len(pieces) > 1 else pieces[0]
 
 
+def _triangle_distance(points: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
+    """Abstand je Punkt zu je einem Dreieck (gleich lange Reihen); nächster Punkt nach Ericson, Real-Time Collision
+    Detection, 5.1.5."""
+    ab, ac, ap = b - a, c - a, points - a
+    d1, d2 = (ab * ap).sum(-1), (ac * ap).sum(-1)
+    bp = points - b
+    d3, d4 = (ab * bp).sum(-1), (ac * bp).sum(-1)
+    cp = points - c
+    d5, d6 = (ab * cp).sum(-1), (ac * cp).sum(-1)
+    va, vb, vc = d3 * d6 - d5 * d4, d5 * d2 - d1 * d6, d1 * d4 - d3 * d2
+    with np.errstate(divide="ignore", invalid="ignore"):
+        total = va + vb + vc
+        v, w = np.nan_to_num(vb / total), np.nan_to_num(vc / total)
+        closest = a + ab * v[:, None] + ac * w[:, None]
+        # Ränder und Ecken, von innen nach außen überschrieben.
+        t = np.clip(np.nan_to_num((d4 - d3) / ((d4 - d3) + (d5 - d6))), 0, 1)
+        edge = (va <= 0) & (d4 - d3 >= 0) & (d5 - d6 >= 0)
+        closest[edge] = (b + (c - b) * t[:, None])[edge]
+        t = np.clip(np.nan_to_num(d2 / (d2 - d6)), 0, 1)
+        edge = (vb <= 0) & (d2 >= 0) & (d6 <= 0)
+        closest[edge] = (a + ac * t[:, None])[edge]
+        t = np.clip(np.nan_to_num(d1 / (d1 - d3)), 0, 1)
+        edge = (vc <= 0) & (d1 >= 0) & (d3 <= 0)
+        closest[edge] = (a + ab * t[:, None])[edge]
+    closest[(d6 >= 0) & (d5 <= d6)] = c[(d6 >= 0) & (d5 <= d6)]
+    closest[(d3 >= 0) & (d4 <= d3)] = b[(d3 >= 0) & (d4 <= d3)]
+    closest[(d1 <= 0) & (d2 <= 0)] = a[(d1 <= 0) & (d2 <= 0)]
+    return np.linalg.norm(points - closest, axis=1)
+
+
 def _voxels(triangles: np.ndarray, pitch: float, close: float):
-    """Wasserdicht über ein Raster: was von außen erreichbar ist, ist außen; alles andere ist voll."""
+    """Wasserdicht über ein Raster: was von außen erreichbar ist, ist außen; alles andere ist voll.
+
+    Das Raster entscheidet nur, was innen und außen ist. Die neue Oberfläche liegt im genauen Abstand shell zur alten
+    (Abstand zum nächsten Dreieck, nicht zur nächsten Zelle); so bleibt sie glatt statt treppig, und eine einzelne
+    Fläche wird 2 * shell dick.
+    """
     from scipy import ndimage
+    from scipy.spatial import cKDTree
     from skimage import measure
 
+    shell = 0.6 * pitch
     low = triangles.reshape(-1, 3).min(axis=0) - close - 3 * pitch
     high = triangles.reshape(-1, 3).max(axis=0) + close + 3 * pitch
     shape = np.ceil((high - low) / pitch).astype(int) + 1
@@ -229,21 +268,39 @@ def _voxels(triangles: np.ndarray, pitch: float, close: float):
     u[flip], v[flip] = 1 - u[flip], 1 - v[flip]
     samples = a[owner] + u[:, None] * (b - a)[owner] + v[:, None] * (c - a)[owner]
     samples = np.concatenate([samples, triangles.reshape(-1, 3)])
+    owner = np.concatenate([owner, np.repeat(np.arange(len(triangles)), 3)])
     occupied = np.zeros(shape, bool)
     cells = np.clip(np.round((samples - low) / pitch).astype(int), 0, shape - 1)
     occupied[cells[:, 0], cells[:, 1], cells[:, 2]] = True
-    del samples, cells
-    free = ndimage.distance_transform_edt(~occupied) * pitch > close
+    del cells, u, v
+    distance = (ndimage.distance_transform_edt(~occupied) * pitch).astype(np.float32)
     del occupied
-    labels, _ = ndimage.label(free)
+    labels, _ = ndimage.label(distance > close)
     edge = np.unique(np.concatenate([labels[0].ravel(), labels[-1].ravel(), labels[:, 0].ravel(), labels[:, -1].ravel(),
                                      labels[:, :, 0].ravel(), labels[:, :, -1].ravel()]))
     outside = np.isin(labels, edge[edge > 0])
-    del labels, free
-    # Der Außenraum endet close vor der Oberfläche; um close weiter innen liegt sie wieder an ihrem Platz.
-    field = ndimage.distance_transform_edt(~outside) * pitch - close
-    points, faces, _, _ = measure.marching_cubes(field.astype(np.float32), 0.0, spacing=(pitch,) * 3)
-    solid = _manifold(points + low, faces[:, ::-1])
+    del labels
+    # Nahe der Oberfläche den genauen Abstand, zu den Dreiecken der nächsten Proben (große Dreiecke haben viele Proben,
+    # werden also auch gefunden). Die Zelle ist höchstens eine halbe Raumdiagonale von einer Probe entfernt; das bleibt
+    # die Obergrenze.
+    band = np.argwhere(distance <= shell + 2 * pitch)
+    tree = cKDTree(samples)
+    for start in range(0, len(band), 50_000):
+        chunk = band[start:start + 50_000]
+        where = low + chunk * pitch
+        _, nearest = tree.query(where, k=NEAREST, workers=-1)
+        which = owner[nearest.ravel()]
+        exact = _triangle_distance(np.repeat(where, NEAREST, axis=0), a[which], b[which], c[which])
+        cell = tuple(chunk.T)
+        distance[cell] = np.minimum(exact.reshape(-1, NEAREST).min(axis=1), distance[cell] + 0.87 * pitch)
+    # Der Außenraum endete close vor der Oberfläche; bis auf shell an sie heran, aber nicht durch Löcher hinein.
+    open_ = distance > shell
+    outside = ndimage.binary_dilation(outside, iterations=int(np.ceil((close - shell) / pitch)) + 2, mask=open_)
+    # Innen negativ: nahe der Oberfläche glatt nach dem Abstand, tiefer drinnen (und in geschlossenen Löchern) fest.
+    field = np.where(outside | ~open_, distance - shell, -0.5 * pitch).astype(np.float32)
+    del distance, outside, open_, samples, owner, tree
+    points, faces, _, _ = measure.marching_cubes(field, 0.0, spacing=(pitch,) * 3)
+    solid = _manifold(points + low, faces)
     if solid.is_empty():
         raise PrintError("Die Figur ließ sich nicht schließen")
     return solid
@@ -322,7 +379,7 @@ def make_print(glb: bytes, pose: dict | None = None, height: float = 120.0, base
     if solid is None:
         method = "voxels"
         size = triangles.reshape(-1, 3).max(axis=0) - triangles.reshape(-1, 3).min(axis=0)
-        pitch = max(height / 300, 0.25)
+        pitch = max(height / 550, 0.2)
         while np.prod(np.ceil((size + 2 + 8 * pitch) / pitch)) > MAX_CELLS:
             pitch *= 1.15
         solid = _voxels(triangles, pitch, close=1.5 * pitch)
