@@ -122,7 +122,7 @@ def test_bad_requests_are_refused():
 
 def test_distance_to_a_triangle():
     from omat3d.printout import _triangle_distance
-    a, b, c = np.array([[0, 0, 0]] * 4.0), np.array([[1, 0, 0]] * 4.0), np.array([[0, 1, 0]] * 4.0)
+    a, b, c = (np.tile(np.array(corner, float), (4, 1)) for corner in ([0, 0, 0], [1, 0, 0], [0, 1, 0]))
     # Über der Fläche, neben einer Kante, hinter einer Ecke, auf der Fläche.
     points = np.array([[0.2, 0.2, 0.5], [0.5, -0.3, 0], [2, 0, 0], [0.1, 0.1, 0]])
     assert _triangle_distance(points, a, b, c) == pytest.approx([0.5, 0.3, 1, 0])
