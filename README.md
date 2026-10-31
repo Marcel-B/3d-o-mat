@@ -1,6 +1,6 @@
 # 3d-o-mat
 
-Aus einem Bild ein 3D-Modell: Bild hochladen, freistellen lassen, optional von Gemma prüfen lassen, in 3D umwandeln, drehbar ansehen, als GLB herunterladen. Ohne Bild schreibt Gemma aus einer Idee Bild-Prompts, und img-o-mat malt sie.
+Aus einem Bild ein 3D-Modell: Bild hochladen, freistellen lassen, optional von Gemma prüfen lassen, in 3D umwandeln, drehbar ansehen, als GLB oder als 3MF für den 3D-Drucker herunterladen; eine Figur lässt sich vorher in eine Haltung stellen. Ohne Bild schreibt Gemma aus einer Idee Bild-Prompts, und img-o-mat malt sie.
 
 | Teil | Wo | Was |
 | --- | --- | --- |
@@ -41,6 +41,13 @@ Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schran
    - Bei „Mensch“ tragen die Knochen Mixamo-Namen. Animationen von Mixamo (Without Skin) passen dann direkt, etwa in Godot oder Unity.
    - Der Viewer zeigt die Figur mit Proben (Gehen, Schlag, Tritt, Arme heben, Kniebeuge, Umfallen), Schiebern für einzelne Knochen und dem Befund, welche Mixamo-Knochen gefunden wurden.
    - „GLB mit Proben herunterladen“ hängt die sechs Proben als glTF-Animationen an das GLB (30 Bilder je Sekunde, eine Runde je Probe, mit der eingestellten Stärke). In Godot erscheinen sie im `AnimationPlayer` als „Gehen“, „Tritt“, „Umfallen“ usw., in Blender als Aktionen. Netz, Texturen und Skelett bleiben unverändert; nur bewegte Knoten, die als Matrix gespeichert sind, werden in Lage, Drehung und Größe zerlegt, weil glTF das für Animationen verlangt. Die Proben sind Prüfbewegungen; für ein Spiel passen Mixamo-Animationen über Godots Retargeting besser.
+
+6. **Für den 3D-Druck (optional):** Unter jedem fertigen Modell macht „Für den 3D-Druck“ eine Datei für den Slicer: 3MF (Bambu Studio, PrusaSlicer, OrcaSlicer, Cura) oder STL, in Millimetern, mit wählbarer Höhe (20 bis 400 mm) und auf Wunsch mit rundem Sockel. Gerechnet wird im Container auf der CPU (`omat3d/printout.py`), ohne Modell auf oi-o-mat:
+   - Bei einem Modell mit Skelett zählt die Haltung, die der Viewer gerade zeigt. Die Seite schickt die Drehung jedes Knochens; der Server bewegt die Punkte mit den Gewichten aus SkinTokens mit (Linear Blend Skinning, wie three.js) und stellt den tiefsten Punkt auf den Boden.
+   - Sind alle Teile geschlossen, verschmilzt [manifold3d](https://github.com/elalish/manifold) sie zu einem Körper. Sonst wird die Figur über ein Raster (etwa 0,4 mm bei 120 mm Höhe) neu umhüllt: Löcher bis gut 1 mm schließen sich, hauchdünne Flächen werden etwa 1 mm dick. Mit Beispielfiguren dauerte das 2 bis 6 Sekunden und brauchte unter 1 GB; es rechnet immer nur eine Datei auf einmal.
+   - Gedruckt wird nur die Form. Was TRELLIS.2 nur in die Textur gemalt hat (Augen, Muster, oft auch eine Brille), fehlt. Finger und Riemen unter etwa 0,8 mm brechen beim FDM-Druck leicht; für Figuren um 10 bis 15 cm ist Resin besser.
+
+   **Haltung:** Im Viewer mit Skelett gibt es unter „Haltung“ fertige Haltungen (Arme runter, Lässig stehen, Heldenpose, Schritt, Winken). Oder man beschreibt eine, etwa „steht lässig, rechte Hand winkt“, und Gemma setzt Winkel für 16 Mixamo-Knochen (`/api/pose`). Danach lässt sich jeder Knochen mit den Schiebern nachstellen; die Schieber drehen von der gewählten Haltung aus und merken sich ihre Werte je Knochen. Die Füße bleiben auf dem Gitter. Starke Winkel (Ellbogen, Knie über etwa 100°) knicken das Netz sichtbar, ruhige Haltungen mit Armen nah am Körper drucken sich am besten.
 
 Ist die T7 nicht da (keine Datei `.3d-o-mat` im Ordner) oder oi-o-mat nicht erreichbar, nimmt die Website nichts an und zeigt „T7 nicht erreichbar“. So landet nie etwas auf der internen Platte von oi-o-mat.
 
@@ -109,6 +116,7 @@ Das Skript erledigt:
 - Code und Gewichte von SkinTokens stehen unter MIT, das eingebaute Qwen3-0.6B unter Apache-2.0.
 - Das gebaute `skintokens`-Programm ist GPL-3.0, weil sein Teil zum Einlesen der Form aus Michelangelo stammt. 3d-o-mat ruft es nur als eigenes Programm auf und bleibt MIT.
 - Die erzeugten Skelette und Gewichte sind Ausgaben des Modells und kein GPL-Code.
+- Für die Druckdatei nutzt die Website manifold3d (Apache-2.0) und scikit-image (BSD-3-Clause).
 
 Gemessen auf oi-o-mat (M6, 32 GB) mit einer TRELLIS-Figur (226.000 Punkte): 34,5 s, höchstens 8,3 GB.
 
@@ -147,7 +155,7 @@ cp config.example.json config.json
 cd frontend && npm run dev
 ```
 
-`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, unzulässige Pfade. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
+`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, Haltung von Gemma, Druckdatei, unzulässige Pfade. `tests/test_printout.py` backt die Haltung eines kleinen GLB mit zwei Knochen ein und prüft auf beiden Wegen, dass die Druckdatei wasserdicht ist. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
 
 ## Später
 

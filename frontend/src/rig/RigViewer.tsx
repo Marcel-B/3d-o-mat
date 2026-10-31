@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { RigStage, type Clip, type Facts } from './stage';
+import { POSES, RigStage, type Clip, type Facts, type PoseName } from './stage';
+import { PrintPanel } from '../components/PrintPanel';
 import { useLang } from '../i18n';
 
 const order: Clip[] = ['walk', 'punch', 'kick', 'arms', 'squat', 'fall'];
+const poses = Object.keys(POSES) as PoseName[];
 
 // Ein GLB mit Skelett ansehen und bewegen: Proben, Knochen von Hand, Skelett und Drahtgitter.
 export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; scheme: 'light' | 'dark' }) {
-  const { t: { locale, rig: t } } = useLang();
+  const { lang, t: { locale, rig: t } } = useLang();
   // Die Proben heißen im GLB so wie auf der Seite.
   const clips = order.map(clip => [clip, t.clips[clip]] as [Clip, string]);
   const loadFailed = useRef(t.loadFailed);
@@ -20,6 +22,13 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
   const [amp, setAmp] = useState(1);
   const [bone, setBone] = useState(0);
   const [angles, setAngles] = useState<[number, number, number]>([0, 0, 0]);
+  // Was die Schieber je Knochen eingestellt haben, damit ein Wechsel des Knochens nichts verliert.
+  const turned = useRef(new Map<number, [number, number, number]>());
+  const [pose, setPose] = useState<PoseName | null>(null);
+  const [describe, setDescribe] = useState('');
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [poseError, setPoseError] = useState<string | null>(null);
   const [skeleton, setSkeleton] = useState(true);
   const [wire, setWire] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -52,7 +61,7 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
   function play(next: Clip) {
     const value = clip === next ? null : next;
     setClip(value);
-    setAngles([0, 0, 0]);
+    setAngles([0, 0, 0]); turned.current.clear(); setPose(null); setNote(null);
     stage.current?.setClip(value);
   }
 
@@ -60,13 +69,40 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
     const next = [...angles] as [number, number, number];
     next[axis] = value;
     setAngles(next);
+    turned.current.set(bone, next);
     setClip(null);
     stage.current?.rotate(bone, next);
   }
 
+  function pick(index: number) {
+    setBone(index);
+    setAngles(turned.current.get(index) ?? [0, 0, 0]);
+  }
+
   function reset() {
-    setClip(null); setAngles([0, 0, 0]);
+    setClip(null); setAngles([0, 0, 0]); turned.current.clear(); setPose(null); setNote(null);
     stage.current?.setClip(null);
+  }
+
+  // Eine fertige Haltung oder eine von Gemma; die Schieber fangen danach wieder bei 0 an.
+  function hold(name: PoseName | null, angles = name ? POSES[name] : null) {
+    if (!angles) return;
+    setClip(null); setAngles([0, 0, 0]); turned.current.clear(); setPose(name);
+    stage.current?.applyPose(angles);
+  }
+
+  async function ask() {
+    if (!describe.trim()) return;
+    setAsking(true); setPoseError(null); setNote(null);
+    try {
+      const answer = await api.pose(describe, lang);
+      hold(null, answer.pose);
+      setNote(answer.note);
+    } catch (e) {
+      setPoseError(t.poseFailed((e as Error).message));
+    } finally {
+      setAsking(false);
+    }
   }
 
   // Alle Proben mit der eingestellten Stärke als Animationen ins GLB, für Godot (AnimationPlayer) oder Blender.
@@ -106,14 +142,31 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
             </label>
           </div>
           <details>
+            <summary>{t.pose}</summary>
+            <div className="row tight">
+              {poses.map(name => (
+                <button key={name} type="button" className={pose === name ? 'primary' : ''} aria-pressed={pose === name} onClick={() => hold(name)}>{t.poses[name]}</button>
+              ))}
+            </div>
+            <form className="row tight" onSubmit={e => { e.preventDefault(); ask(); }}>
+              <input id="rig-describe" className="grow" value={describe} maxLength={500} placeholder={t.describe} aria-label={t.describe}
+                onChange={e => setDescribe(e.target.value)} />
+              <button type="submit" disabled={asking || !describe.trim()}>{asking ? t.asking : t.ask}</button>
+            </form>
+            {note && <div className="small muted">{note}</div>}
+            {poseError && <div className="error">{poseError}</div>}
+            <div className="small muted">{t.poseHint}</div>
+          </details>
+          <details>
             <summary>{t.byHand}</summary>
             <div className="bone-grid">
-              <select id="rig-bone" value={bone} onChange={e => { setBone(Number(e.target.value)); setAngles([0, 0, 0]); }} aria-label={t.bone}>
+              <select id="rig-bone" value={bone} onChange={e => pick(Number(e.target.value))} aria-label={t.bone}>
                 {stage.current?.bones.map((b, i) => <option key={i} value={i}>{b.name || `${t.bone} ${i}`}</option>)}
               </select>
               {(['X', 'Y', 'Z'] as const).map((axis, i) => (
                 <label key={axis} className="axis">{axis}
-                  <input id={`rig-${axis}`} type="range" min={-120} max={120} value={angles[i]} onChange={e => turn(i, Number(e.target.value))} />
+                  <input id={`rig-${axis}`} type="range" min={-120} max={120} value={angles[i]} onChange={e => turn(i, Number(e.target.value))}
+                    onPointerUp={() => stage.current?.ground()} onKeyUp={() => stage.current?.ground()} />
                   <output>{angles[i]}°</output>
                 </label>
               ))}
@@ -132,6 +185,7 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
             <span className="small muted">{t.downloadHint}</span>
           </div>
           {exportError && <div className="error">{exportError}</div>}
+          <PrintPanel jobId={jobId} pose={() => stage.current?.printPose()} />
           {missing.length > 0 && <div className="small warn">{t.missing(missing.map(m => m.name).join(', '))}</div>}
         </div>
       )}

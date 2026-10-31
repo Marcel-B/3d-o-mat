@@ -2,6 +2,7 @@ import '@google/model-viewer';
 import { useState } from 'react';
 import { api, modelUrl, type Job } from '../api';
 import { RigViewer } from '../rig/RigViewer';
+import { PrintPanel } from './PrintPanel';
 import { useT } from '../i18n';
 
 declare module 'react' {
@@ -75,6 +76,7 @@ export function Viewer({ job, jobs, scheme, onRigStarted }: Props) {
           </span>
         </div>
       )}
+      {ready && !rigged && <PrintPanel key={job.id} jobId={job.id} />}
       {ready && !rigged && (
         <div className="row rig-start">
           <button type="button" onClick={rig} disabled={busy}>{existing ? t.toRigged : busy ? t.starting : failed ? t.retry : t.rig}</button>

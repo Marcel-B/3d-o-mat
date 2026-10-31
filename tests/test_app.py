@@ -54,6 +54,9 @@ class FakeGate:
                 "3d-o-mat": {"known": True, "held": None, "models": [{"model": "trellis", "state": "aus", "approved": True}]}}})
         if request.url.path == "/v1/chat/completions":
             body = json.loads(request.content)
+            if "Haltung" in str(body["messages"][0]["content"]):
+                return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"pose": {
+                    "LeftArm": [0, 0, 10], "Tail": [1, 2, 3], "RightLeg": [400, 0, "x"]}, "note": "Arm unten"})}}]})
             text = json.dumps({"suitable": True, "object": "rote Scheibe", "problems": [], "tips": ["flach"]}) \
                 if isinstance(body["messages"][0]["content"], list) \
                 else "```json\n" + json.dumps({"prompts": ["a red ceramic disc"], "note": "schlicht"}) + "\n```"
@@ -188,6 +191,25 @@ def test_gemma_check_and_prompts(make):
         assert checked["check"]["suitable"] is True and checked["check"]["object"] == "rote Scheibe"
         prompts = client.post("/api/prompts", json={"idea": "eine rote Scheibe"}).json()
         assert prompts["prompts"] == ["a red ceramic disc"]
+
+
+def test_gemma_poses_a_figure(make):
+    with make([])[0] as client:
+        pose = client.post("/api/pose", json={"text": "Arme runter"}).json()
+        # Unbekannte Knochen und Werte, die keine Zahlen sind, fallen weg.
+        assert pose == {"text": "Arme runter", "pose": {"LeftArm": [0, 0, 10]}, "note": "Arm unten"}
+        assert client.post("/api/pose", json={"text": ""}).status_code == 422
+
+
+def test_print_file_only_for_finished_models(make):
+    with make([done_stream()])[0] as client:
+        job = wait_for(client, client.post("/api/jobs", json={"imageId": upload(client)["id"]}).json()["id"])
+        assert client.post(f"/api/jobs/{job['id']}/print", json={"pose": {"1": [0, 0, 0, 1]}}).status_code == 409
+        assert client.post(f"/api/jobs/{job['id']}/print", json={"format": "obj"}).status_code == 422
+        assert client.post(f"/api/jobs/{job['id']}/print", json={"height": 1000}).status_code == 422
+        # Das nachgestellte GLB ist keins; echte prüft tests/test_printout.py.
+        refused = client.post(f"/api/jobs/{job['id']}/print", json={})
+        assert refused.status_code == 422 and "GLB" in refused.json()["detail"]
 
 
 def test_gemma_answers_in_the_language_of_the_page(make):

@@ -154,6 +154,11 @@ textarea { resize: vertical; }
 .rig-controls .amp { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .rig-controls .amp input { width: 7rem; accent-color: var(--accent); }
 .rig-controls details summary { cursor: pointer; font-size: .9rem; }
+.rig-controls details > * + *, .print > * + * { margin-top: 8px; }
+.print { margin-top: 12px; }
+.print summary { cursor: pointer; font-size: .9rem; }
+.print input[type="number"] { width: 5.5em; margin-left: 6px; }
+.print input[type="checkbox"] { accent-color: var(--accent); }
 .bone-grid { display: grid; gap: 8px; margin-top: 8px; }
 .bone-grid .axis { display: grid; grid-template-columns: 1.2em minmax(0, 1fr) 3.4em; gap: 8px; align-items: center; font-size: .84rem; }
 .bone-grid .axis input { accent-color: var(--accent); }
