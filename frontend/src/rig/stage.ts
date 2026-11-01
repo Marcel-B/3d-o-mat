@@ -13,7 +13,8 @@ export type Baked = { name: string; times: number[]; tracks: Track[] };
 // Rumpf, Hals, Kopf: x nach vorn neigen, y nach links drehen, z zur linken Seite neigen. Oberarm: x heben (0 hängt,
 // 90 waagrecht, 180 senkrecht nach oben), z wohin (0 nach vorn, 90 zur Seite, 180 nach hinten), y um sich selbst drehen.
 // Unterarm: x Ellbogen beugen, z nach außen und oben. Oberschenkel: x nach vorn, z nach außen. Knie: x beugen.
-// Fuß: x Zehen heben. Links und rechts aus Sicht der Figur.
+// Fuß: x Zehen heben. LeftFist, RightFist: x wie fest die Faust (0 offen, 100 geschlossen), wirkt nur mit Fingerknochen.
+// Links und rechts aus Sicht der Figur.
 export type Pose = Record<string, [number, number, number]>;
 export type PoseName = 'down' | 'relaxed' | 'hero' | 'stride' | 'wave' | 'cheer';
 export const POSES: Record<PoseName, Pose> = {
@@ -25,6 +26,7 @@ export const POSES: Record<PoseName, Pose> = {
   hero: {
     Spine: [-4, 0, 0], Spine2: [-4, 0, 0], Neck: [-4, 15, 0], LeftArm: [22, 0, 90], RightArm: [22, 0, 90],
     LeftForeArm: [25, 0, 0], RightForeArm: [25, 0, 0], LeftUpLeg: [0, 0, 9], RightUpLeg: [0, 0, 9],
+    LeftFist: [100, 0, 0], RightFist: [100, 0, 0],
   },
   stride: {
     Spine: [3, -6, 0], LeftArm: [17, 0, 150], RightArm: [20, 0, 25], LeftForeArm: [10, 0, 0], RightForeArm: [20, 0, 0],
@@ -39,7 +41,7 @@ export const POSES: Record<PoseName, Pose> = {
 const POSE_ORDER = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftArm', 'RightArm', 'LeftForeArm', 'RightForeArm',
   'LeftUpLeg', 'RightUpLeg', 'LeftLeg', 'RightLeg', 'LeftFoot', 'RightFoot'];
 
-export type Facts = { bones: number; meshes: number; vertices: number; core: { name: string; found: boolean }[] };
+export type Facts = { bones: number; meshes: number; vertices: number; core: { name: string; found: boolean }[]; fingers: number };
 
 // Mixamo-Namen, wie skintokens sie mit --class humanoid vergibt (mit oder ohne "mixamorig:").
 const CORE = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand',
@@ -186,6 +188,7 @@ export class RigStage {
       meshes: this.meshes.length,
       vertices: this.meshes.reduce((sum, mesh) => sum + mesh.geometry.attributes.position.count, 0),
       core: CORE.map(name => ({ name, found: !!this.find(name) })),
+      fingers: this.fingers.length,
     };
   }
 
@@ -267,9 +270,17 @@ export class RigStage {
       else if (/^(Left|Right)Leg$/.test(name)) this.turn(name, x, y, side * z);
       else this.turn(name, -x, y, side * z);
     }
+    for (const side of ['Left', 'Right'] as const) this.fist(side, Math.max(0, Math.min(100, pose[`${side}Fist`]?.[0] ?? 0)) / 100);
     this.amplitude = amplitude;
     this.base = new Map(this.bones.map(bone => [bone, bone.quaternion.clone()]));
     this.ground();
+  }
+
+  // Eine Faust von Hand (0 bis 1), ausgehend von der Lage, in der die Hand gerade ist; bleibt beim Nachstellen erhalten.
+  setFist(side: 'Left' | 'Right', amount: number) {
+    this.clip = null;
+    this.fist(side, amount);
+    for (const { bone, side: which } of this.fingers) if (which === side) this.base.set(bone, bone.quaternion.clone());
   }
 
   // Die Figur so heben oder senken, dass ihr tiefster Punkt (mit Skelett gerechnet) auf dem Gitter liegt.
@@ -474,7 +485,7 @@ export class RigStage {
   // Die Finger einer Hand zur Faust schließen (amount 0 bis 1); ohne Fingerknochen tut das nichts.
   private fist(side: 'Left' | 'Right', amount: number) {
     for (const { bone, hand, axis, thumb, side: which } of this.fingers) {
-      if (which !== side || amount <= 0) continue;
+      if (which !== side) continue;
       const world = axis.clone().applyQuaternion(hand.getWorldQuaternion(new THREE.Quaternion()));
       const name = bone.name.replace(/^mixamorig[:_]?/i, '');
       this.turnBy(name, new THREE.Quaternion().setFromAxisAngle(world, amount * (thumb ? 0.7 : 1.35)));

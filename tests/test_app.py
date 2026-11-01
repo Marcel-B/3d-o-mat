@@ -56,7 +56,7 @@ class FakeGate:
             body = json.loads(request.content)
             if "Haltung" in str(body["messages"][0]["content"]):
                 return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"pose": {
-                    "LeftArm": [0, 0, 10], "Tail": [1, 2, 3], "RightLeg": [400, 0, "x"]}, "note": "Arm unten"})}}]})
+                    "LeftArm": [0, 0, 10], "RightFist": [100, 0, 0], "Tail": [1, 2, 3], "RightLeg": [400, 0, "x"]}, "note": "Arm unten"})}}]})
             text = json.dumps({"suitable": True, "object": "rote Scheibe", "problems": [], "tips": ["flach"]}) \
                 if isinstance(body["messages"][0]["content"], list) \
                 else "```json\n" + json.dumps({"prompts": ["a red ceramic disc"], "note": "schlicht"}) + "\n```"
@@ -197,7 +197,7 @@ def test_gemma_poses_a_figure(make):
     with make([])[0] as client:
         pose = client.post("/api/pose", json={"text": "Arme runter"}).json()
         # Unbekannte Knochen und Werte, die keine Zahlen sind, fallen weg.
-        assert pose == {"text": "Arme runter", "pose": {"LeftArm": [0, 0, 10]}, "note": "Arm unten"}
+        assert pose == {"text": "Arme runter", "pose": {"LeftArm": [0, 0, 10], "RightFist": [100, 0, 0]}, "note": "Arm unten"}
         assert client.post("/api/pose", json={"text": ""}).status_code == 422
 
 
