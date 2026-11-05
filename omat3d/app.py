@@ -17,6 +17,7 @@ from .animate import AnimationError, add_animations
 from .config import Config
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
 from .jobs import OPEN, Jobs
+from .notify import Notifier
 from .paint import SIZES, Paintings
 from .printout import PrintError, make_print
 from .store import NotMounted, Store, StoreError, new_id
@@ -89,7 +90,9 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
                log=print) -> FastAPI:
     store = store or make_store(config, log)
     gate = gate or Gate(config.gate_url, config.app_name, config.request_timeout_minutes)
-    jobs = Jobs(store, gate, config.trellis_model, config.defaults, log, rig_model=config.rig_model)
+    notifier = Notifier(config.onkel_bummel, store, log)
+    jobs = Jobs(store, gate, config.trellis_model, config.defaults, log, rig_model=config.rig_model,
+                on_finish=notifier.job_finished)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -105,6 +108,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
 
     app = FastAPI(title="3d-o-mat", lifespan=lifespan)
     app.state.jobs = jobs
+    app.state.notifier = notifier
     app.state.store = store
 
     @app.exception_handler(NotMounted)

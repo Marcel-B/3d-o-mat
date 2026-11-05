@@ -19,8 +19,11 @@ def now() -> str:
 
 
 class Jobs:
-    def __init__(self, store: Store, gate: Gate, model: str, defaults: dict, log=print, rig_model: str = "skintokens"):
+    def __init__(self, store: Store, gate: Gate, model: str, defaults: dict, log=print, rig_model: str = "skintokens",
+                 on_finish=None):
         self.store = store
+        # Bekommt jeden Auftrag, der fertig oder fehlgeschlagen ist (Onkel Bummel); muss sofort zurückkehren.
+        self.on_finish = on_finish
         self.gate = gate
         self.model = model
         self.rig_model = rig_model
@@ -124,6 +127,7 @@ class Jobs:
         self.current = job_id
         started = time.monotonic()
         broken = busy = 0
+        finished = None
         try:
             report = None
             if job.get("kind") == "rig":
@@ -159,18 +163,23 @@ class Jobs:
             # launch.py schreibt daneben und benennt dann um: nie ein halbes GLB auf der T7.
             self.store.put("jobs", job_id, "model.glb", glb)
             seconds = round(time.monotonic() - started)
-            self.update(job_id, state="done", finished=now(), seconds=seconds, glbBytes=len(glb), message=None, stage=None,
-                        **({"report": report} if report is not None else {}))
+            finished = self.update(job_id, state="done", finished=now(), seconds=seconds, glbBytes=len(glb), message=None,
+                                   stage=None, **({"report": report} if report is not None else {}))
             self.log(f"{job_id}: fertig in {seconds} s, {len(glb) // 1024} KB")
         except GateRefused as error:
             hint = " Freigeben oder installieren in der Oberfläche der Schranke (/gate)." if error.status in (403, 424) else ""
-            self.update(job_id, state="failed", finished=now(), message=f"{error}.{hint}")
+            finished = self.update(job_id, state="failed", finished=now(), message=f"{error}.{hint}")
             self.log(f"{job_id}: abgewiesen ({error.status}): {error}")
         except Exception as error:  # noqa: BLE001 – jeder Fehler gehört in den Auftrag, nicht in den Arbeiter
-            self.update(job_id, state="failed", finished=now(), message=str(error) or type(error).__name__)
+            finished = self.update(job_id, state="failed", finished=now(), message=str(error) or type(error).__name__)
             self.log(f"{job_id}: fehlgeschlagen: {error!r}")
         finally:
             self.current = None
+        if self.on_finish and finished:
+            try:
+                self.on_finish(finished)
+            except Exception as error:  # noqa: BLE001 – eine Nachricht darf den Arbeiter nicht anhalten
+                self.log(f"{job_id}: Nachricht: {error!r}")
 
     def progress(self, job_id: str, stage, step, total) -> None:
         self.update(job_id, state="running", stage=stage, step=step, total=total, message=None)

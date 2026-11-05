@@ -145,6 +145,7 @@ cp config.example.json config.json
 | `paintModels` | die Bildmodelle von img-o-mat zur Auswahl, das erste ist die Vorgabe (`klein-4b`, `z-image-turbo`, `krea-2-turbo`). Fehlt eines dieser Modelle in `gate.models`, meldet die App es trotzdem an; so reicht bei einer älteren `config.json` ein Update |
 | `defaults` | Vorgaben für `/v1/3d/generations`: `texture_size`, `decimation_target`, auch `resolution`, `steps` |
 | `cutout` | `auto`, `rembg`, `flood` oder `none` |
+| `onkelBummel` | Nachricht an [Onkel Bummel](https://github.com/Marcel-B/onkel-bummel), wenn ein 3D-Modell oder Skelett fertig ist oder fehlschlägt, mit dem freigestellten Bild: `{"url": "https://onkel-bummel.<tailnet>.ts.net", "token": "ob_…", "topic": "3d-o-mat", "click": "http://3d-o-mat:8090/"}`. Den Token (Publish-Token für das Topic) legst du in Onkel Bummel unter Verwaltung → Publish-Tokens an; statt `token` geht `tokenFile`. Ohne `url` kommt keine Nachricht. Gemalte Bilder meldet img-o-mat selbst |
 | `rembgModel` | Vorgabe `isnet-general-use`: auf einem 12-MP-Foto 9 s und 1,5 GB RAM. `birefnet-general` stellt etwas feiner frei, braucht aber 115 s und 9,5 GB, mehr als der Container hat |
 
 ## Entwickeln
