@@ -34,6 +34,9 @@ export type Job = {
   kind?: 'rig';
   sourceJobId?: string;
   report?: { joints_raw?: number; naming?: string; weights?: { verts?: number } } | null;
+  // Wie viele Gelenke des Skeletts von Hand verschoben wurden (0 oder fehlt: das Skelett von SkinTokens).
+  skeletonEdited?: number;
+  fingers?: Record<string, number>;
   imageId: string;
   imageName: string | null;
   options: Options;
@@ -136,6 +139,10 @@ export const api = {
     const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? `${id}-proben.glb`;
     return { blob: await response.blob(), name };
   },
+  // Gelenke des Skeletts verschieben (Knoten -> neue Lage) und das Original wiederherstellen.
+  moveJoints: (id: string, moves: Record<string, [number, number, number]>) =>
+    call<{ moved: number; skeletonEdited: number }>('POST', `/api/jobs/${id}/skeleton`, { moves }),
+  resetSkeleton: (id: string) => call<{ skeletonEdited: number }>('POST', `/api/jobs/${id}/skeleton/reset`, {}),
   // Die Figur als Datei für den 3D-Drucker, in der Haltung, die der Viewer gerade zeigt.
   printFile: async (id: string, options: PrintOptions) => {
     const response = await fetch(`/api/jobs/${id}/print`, {

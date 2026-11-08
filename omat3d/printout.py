@@ -19,7 +19,7 @@ import zipfile
 
 import numpy as np
 
-from .animate import AnimationError, _chunks
+from .animate import AnimationError, chunks
 
 MIN_HEIGHT, MAX_HEIGHT = 20.0, 400.0
 FORMATS = ("3mf", "stl")
@@ -104,7 +104,7 @@ def _rotations(pose, nodes: int) -> dict[int, list[float]]:
 def posed_triangles(glb: bytes, pose: dict | None = None) -> np.ndarray:
     """Alle Dreiecke der Szene in der Haltung, als (n, 3, 3) in den Maßen des GLB (Y oben)."""
     try:
-        document, binary = _chunks(glb)
+        document, binary = chunks(glb)
     except AnimationError as error:
         raise PrintError(str(error)) from None
     nodes = document.get("nodes") or []

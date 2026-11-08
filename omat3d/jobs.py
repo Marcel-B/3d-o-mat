@@ -5,6 +5,7 @@ import threading
 import time
 from datetime import datetime
 
+from .fingers import FingerError, name_fingers
 from .gate import Gate, GateBusy, GateRefused, StreamBroken
 from .store import NotMounted, Store, StoreError, new_id
 
@@ -122,6 +123,15 @@ class Jobs:
                 continue
             self.process(job["id"])
 
+    def name_fingers(self, job_id: str, glb: bytes) -> tuple[bytes, dict]:
+        """The GLB with Mixamo names on its finger chains and the count per side; a GLB that cannot be read stays as
+        it is, with an empty count, so the job still finishes."""
+        try:
+            return name_fingers(glb)
+        except FingerError as error:
+            self.log(f"{job_id}: Finger nicht benannt: {error}")
+            return glb, {}
+
     def process(self, job_id: str) -> None:
         job = self.update(job_id, state="waiting", started=now(), message="geht an oi-o-mat")
         self.current = job_id
@@ -160,11 +170,16 @@ class Jobs:
                         raise
                     self.update(job_id, state="waiting", message=f"{error}; neuer Versuch in {int(error.retry_after)} s")
                     self.stop.wait(error.retry_after)
+            fingers = None
+            if job.get("kind") == "rig":
+                # SkinTokens leaves the finger chains unnamed; named, the fist, Gemma and Godot can use them.
+                glb, fingers = self.name_fingers(job_id, glb)
             # launch.py schreibt daneben und benennt dann um: nie ein halbes GLB auf der T7.
             self.store.put("jobs", job_id, "model.glb", glb)
             seconds = round(time.monotonic() - started)
             finished = self.update(job_id, state="done", finished=now(), seconds=seconds, glbBytes=len(glb), message=None,
-                                   stage=None, **({"report": report} if report is not None else {}))
+                                   stage=None, **({"report": report} if report is not None else {}),
+                                   **({"fingers": fingers} if fingers is not None else {}))
             self.log(f"{job_id}: fertig in {seconds} s, {len(glb) // 1024} KB")
         except GateRefused as error:
             hint = " Freigeben oder installieren in der Oberfläche der Schranke (/gate)." if error.status in (403, 424) else ""

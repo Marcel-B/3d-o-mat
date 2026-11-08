@@ -48,9 +48,11 @@ const mirrored = (name: string) => name.replace(/^Left/, '\0').replace(/^Right/,
 export type MotionOptions = {
   speed: number; inPlace: boolean; mirror: boolean; start: number; end: number;
   armSpace: number; footLock: boolean; loop: boolean;
+  // fist: wie fest beide Hände geschlossen sind (0 offen, 1 Faust); die Aufnahmen bringen kaum Fingerbewegung mit.
+  fist: number;
 };
 export const DEFAULT_OPTIONS: MotionOptions = {
-  speed: 1, inPlace: false, mirror: false, start: 0, end: 1, armSpace: 0, footLock: true, loop: false,
+  speed: 1, inPlace: false, mirror: false, start: 0, end: 1, armSpace: 0, footLock: true, loop: false, fist: 0,
 };
 // Bilder je Sekunde, in denen Bodenkontakte gesucht und Schleifen geglättet werden (wie der Export).
 const FPS = 30;

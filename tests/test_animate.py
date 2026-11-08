@@ -28,9 +28,9 @@ def test_animations_are_appended_and_the_rest_stays():
         {"node": 1, "path": "rotation", "values": [0, 0, 0, 1, 0.38, 0, 0, 0.92, 0, 0, 0, 1]},
         {"node": 0, "path": "translation", "values": [0, 1, 0, 0, 1.1, 0, 0, 1, 0]}]}]
     out = add_animations(glb, clips)
-    document, binary = animate._chunks(out)
+    document, binary = animate.chunks(out)
     assert struct.unpack_from("<I", out, 8)[0] == len(out) and len(out) % 4 == 0
-    assert binary[:3] == b"\x01\x02\x03" and document["nodes"] == animate._chunks(glb)[0]["nodes"]
+    assert binary[:3] == b"\x01\x02\x03" and document["nodes"] == animate.chunks(glb)[0]["nodes"]
     animation = document["animations"][0]
     assert animation["name"] == "Gehen" and [c["target"] for c in animation["channels"]] == [
         {"node": 1, "path": "rotation"}, {"node": 0, "path": "translation"}]
@@ -56,7 +56,7 @@ def test_bad_animations_are_refused():
 
 def test_animated_nodes_lose_their_matrix():
     glb = minimal_glb()
-    document, binary = animate._chunks(glb)
+    document, binary = animate.chunks(glb)
     # 90° um Y, Größe 2, verschoben: so schreiben manche Werkzeuge Knoten
     document["nodes"][1]["matrix"] = [0, 0, -2, 0, 0, 2, 0, 0, 2, 0, 0, 0, 1, 2, 3, 1]
     text = json.dumps(document).encode()
@@ -64,7 +64,7 @@ def test_animated_nodes_lose_their_matrix():
     padded = binary + b"\0" * (-len(binary) % 4)
     body = struct.pack("<II", len(text), 0x4E4F534A) + text + struct.pack("<II", len(padded), 0x004E4942) + padded
     glb = struct.pack("<4sII", b"glTF", 2, 12 + len(body)) + body
-    out, _ = animate._chunks(add_animations(glb, [{"name": "Tritt", "times": [0, 1], "tracks": [
+    out, _ = animate.chunks(add_animations(glb, [{"name": "Tritt", "times": [0, 1], "tracks": [
         {"node": 1, "path": "rotation", "values": [0, 0, 0, 1] * 2}]}]))
     node = out["nodes"][1]
     assert "matrix" not in node and node["translation"] == [1, 2, 3] and node["scale"] == pytest.approx([2, 2, 2])
@@ -75,7 +75,7 @@ def test_origin_and_licence_travel_with_the_animation():
     clip = {"name": "Gehen (müde)", "times": [0, 1], "extras": {"source": "Bandai Namco Research Motiondataset",
                                                                "license": "CC BY-NC 4.0, non-commercial only"},
             "tracks": [{"node": 1, "path": "rotation", "values": [0, 0, 0, 1] * 2}]}
-    document, _ = animate._chunks(add_animations(minimal_glb(), [clip]))
+    document, _ = animate.chunks(add_animations(minimal_glb(), [clip]))
     assert document["animations"][0]["extras"]["license"].startswith("CC BY-NC")
     for extras in [["nein"], {"a": 1}, {f"k{i}": "v" for i in range(9)}, {"k": "x" * 301}]:
         with pytest.raises(AnimationError, match="extras"):
