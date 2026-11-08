@@ -17,6 +17,7 @@ from .animate import AnimationError, add_animations
 from .config import Config
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
 from .jobs import OPEN, Jobs
+from .motions import Library
 from .notify import Notifier
 from .paint import SIZES, Paintings
 from .printout import PrintError, make_print
@@ -58,7 +59,7 @@ class PaintRequest(BaseModel):
 
 
 class AnimatedRequest(BaseModel):
-    """Die Proben als Keyframes, wie stage.ts bake() sie ausrechnet."""
+    """Proben oder Aufnahmen der Bibliothek als Keyframes, wie stage.ts bake() und bakeMotions() sie ausrechnen."""
     clips: list[dict] = Field(..., min_length=1, max_length=12)
 
 
@@ -110,6 +111,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
     app.state.jobs = jobs
     app.state.notifier = notifier
     app.state.store = store
+    library = Library(config.motions_dir)
 
     @app.exception_handler(NotMounted)
     async def not_mounted(_request: Request, error: NotMounted):
@@ -322,7 +324,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
     def animated(job_id: str, request: AnimatedRequest):
         doc = job(job_id)
         if doc.get("kind") != "rig" or doc["state"] != "done":
-            raise HTTPException(409, "Nur ein fertiges Modell mit Skelett bekommt Proben")
+            raise HTTPException(409, "Nur ein fertiges Modell mit Skelett bekommt Animationen")
         try:
             data = add_animations(store.get("jobs", job_id, "model.glb"), request.clips)
         except FileNotFoundError:
@@ -331,7 +333,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
             raise HTTPException(422, str(error)) from error
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
         return Response(data, media_type="model/gltf-binary",
-                        headers={"content-disposition": f'attachment; filename="{name}-proben-{job_id}.glb"'})
+                        headers={"content-disposition": f'attachment; filename="{name}-animiert-{job_id}.glb"'})
 
     # Die Druckdatei rechnet auf der CPU und braucht einige hundert MB; zwei auf einmal wären zu viel für den Container.
     printing = threading.Lock()
@@ -358,6 +360,20 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
             "content-disposition": f'attachment; filename="{name}-druck-{job_id}.{request.format}"',
             "x-print-info": json.dumps(info),
         })
+
+    # --- Bewegungsbibliothek (motions.py): Liste und die Aufnahmen als BVH, übertragen wird auf der Seite
+
+    @app.get("/api/motions")
+    def motions():
+        return library.index()
+
+    @app.get("/api/motions/{clip_id}.bvh")
+    def motion(clip_id: str):
+        try:
+            text = library.bvh(clip_id)
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(404, "Keine solche Aufnahme") from None
+        return Response(text, media_type="text/plain; charset=utf-8", headers={"cache-control": "public, max-age=604800"})
 
     @app.post("/api/pose")
     def pose(request: PoseRequest):

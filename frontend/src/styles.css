@@ -164,3 +164,19 @@ textarea { resize: vertical; }
 .bone-grid .axis input { accent-color: var(--accent); }
 .bone-grid .axis output { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .rig-start select { width: auto; }
+/* Bewegungsbibliothek im Viewer */
+.motions { display: flex; flex-direction: column; gap: 8px; }
+.motions select { width: auto; max-width: 100%; }
+.motion-list { display: flex; flex-direction: column; gap: 2px; max-height: 15rem; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
+.motion-list button { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; text-align: left; border: 0; padding: 5px 8px; }
+.motion-list button > span:last-child { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.motion-list button.primary .muted { color: inherit; opacity: .8; }
+.motions .badge { display: inline-block; font-size: .7rem; padding: 0 4px; margin-right: 6px; border: 1px solid currentColor; border-radius: 4px; }
+.motion-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.motion-options .amp { margin-left: 0; }
+.motion-options output { min-width: 3.2em; font-variant-numeric: tabular-nums; }
+.motions .check { display: inline-flex; align-items: center; gap: 4px; }
+.motions .check input { accent-color: var(--accent); }
+.motion-takes ul { list-style: none; margin: 4px 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.motion-takes li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.motion-takes li button.link { margin-left: auto; }

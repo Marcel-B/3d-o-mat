@@ -1,5 +1,15 @@
 // Die Schnittstelle der Python-App (omat3d/app.py).
 
+// Die Bewegungsbibliothek (omat3d/motions.py): Aufnahmen aus CMU und Bandai Namco, mit Herkunft und Lizenz.
+export type MotionSource = { name: string; license: string; licenseEn: string; commercial: boolean; credit: string; url: string };
+export type MotionClip = {
+  id: string; source: string; de: string; en: string; category: string; style: string | null;
+  styleDe?: string; styleEn?: string; ref: string; frames: number; seconds: number;
+};
+export type MotionIndex = {
+  sources: Record<string, MotionSource>; categories: Record<string, { de: string; en: string }>; clips: MotionClip[];
+};
+
 export type Check = { suitable: boolean; object: string; problems: string[]; tips: string[] };
 
 export type Image = {
@@ -113,6 +123,8 @@ export const api = {
   createJob: (imageId: string, options: Options) => call<Job>('POST', '/api/jobs', { imageId, options }),
   rigJob: (id: string, kind: string, seed = 1) => call<Job>('POST', `/api/jobs/${id}/rig`, { class: kind, seed }),
   // Die Proben als Animationen im GLB; zurück kommt die Datei.
+  motions: () => fetch('/api/motions').then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() as Promise<MotionIndex>; }),
+  motionBvh: (id: string) => fetch(`/api/motions/${id}.bvh`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); }),
   animatedGlb: async (id: string, clips: unknown[]) => {
     const response = await fetch(`/api/jobs/${id}/animated.glb`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ clips }),

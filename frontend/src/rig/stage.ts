@@ -5,10 +5,13 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { Retarget, type Motion, type MotionOptions } from './retarget';
 
 export type Clip = 'walk' | 'punch' | 'kick' | 'roundhouse' | 'arms' | 'squat' | 'fall';
 export type Track = { node: number; path: 'rotation' | 'translation'; values: number[] };
-export type Baked = { name: string; times: number[]; tracks: Track[] };
+export type Baked = { name: string; times: number[]; tracks: Track[]; extras?: Record<string, string> };
+// Eine Aufnahme aus der Bibliothek, wie sie ins GLB soll: mit Namen, Einstellungen und Herkunft (Lizenz).
+export type MotionTake = { name: string; motion: Motion; options: MotionOptions; extras?: Record<string, string> };
 // Eine Haltung in Grad je Knochen, [x, y, z] in Worten statt Achsen (wie Gemma sie schreibt, omat3d/assist.py):
 // Rumpf, Hals, Kopf: x nach vorn neigen, y nach links drehen, z zur linken Seite neigen. Oberarm: x heben (0 hängt,
 // 90 waagrecht, 180 senkrecht nach oben), z wohin (0 nach vorn, 90 zur Seite, 180 nach hinten), y um sich selbst drehen.
@@ -101,9 +104,12 @@ export class RigStage {
   private nodes = new Map<THREE.Bone, number>();
   private armAngle: Record<string, number> = { LeftArm: Math.PI / 2, RightArm: -Math.PI / 2 };
   private clip: Clip | null = null;
+  // Eine Aufnahme aus der Bibliothek, die gerade läuft (statt einer Probe).
+  private motion: Retarget | null = null;
   private started = 0;
   private frame = 0;
   private resizer: ResizeObserver;
+  private grid: THREE.GridHelper;
   bones: THREE.Bone[] = [];
   amplitude = 1;
 
@@ -117,7 +123,7 @@ export class RigStage {
     const sun = new THREE.DirectionalLight(0xffffff, 2.2);
     sun.position.set(2, 4, 3);
     this.scene.add(sun);
-    const grid = new THREE.GridHelper(4, 16, 0x888888, 0x888888);
+    const grid = this.grid = new THREE.GridHelper(4, 16, 0x888888, 0x888888);
     (grid.material as THREE.Material).opacity = 0.25;
     (grid.material as THREE.Material).transparent = true;
     this.scene.add(grid);
@@ -126,6 +132,7 @@ export class RigStage {
     this.resizer.observe(canvas);
     const loop = (now: number) => {
       if (this.clip) { this.resetPose(); this.play(this.clip, (now - this.started) / 1000); }
+      else if (this.motion) { this.resetPose(); this.motion.apply(((now - this.started) / 1000) % this.motion.length); this.follow(); }
       this.controls.update();
       this.renderer.render(this.scene, this.camera);
       this.frame = requestAnimationFrame(loop);
@@ -257,6 +264,7 @@ export class RigStage {
   // Eine Haltung (siehe Pose) aus der Grundhaltung heraus; danach stehen die Füße wieder auf dem Gitter.
   applyPose(pose: Pose) {
     this.clip = null;
+    if (this.motion) { this.motion = null; this.recenter(); }
     this.resetPose();
     const amplitude = this.amplitude;
     this.amplitude = 1;
@@ -279,6 +287,7 @@ export class RigStage {
   // Eine Faust von Hand (0 bis 1), ausgehend von der Lage, in der die Hand gerade ist; bleibt beim Nachstellen erhalten.
   setFist(side: 'Left' | 'Right', amount: number) {
     this.clip = null;
+    if (this.motion) { this.motion = null; this.recenter(); }
     this.fist(side, amount);
     for (const { bone, side: which } of this.fingers) if (which === side) this.base.set(bone, bone.quaternion.clone());
   }
@@ -515,53 +524,116 @@ export class RigStage {
   // Die Proben als Keyframes (30 je Sekunde, eine Runde) in den Koordinaten des GLB, ohne das Einpassen auf der
   // Bühne: Drehungen der Knochen, dazu für die obersten Knochen die Lage, weil Umfallen die ganze Figur bewegt.
   bake(clips: [Clip, string][], fps = 30): Baked[] {
-    const playing = this.clip;
-    this.clip = null;
-    const current = this.bones.map(bone => [bone.quaternion.clone(), bone.position.clone()] as const);
-    const placed = this.root?.position.clone();
-    const top = this.bones.filter(bone => !(bone.parent as THREE.Bone | null)?.isBone && this.nodes.has(bone));
-    const baked = clips.map(([clip, name]) => {
+    return this.keep(() => clips.map(([clip, name]) => {
       const frames = Math.max(2, Math.round(PERIODS[clip] * fps));
       const times = Array.from({ length: frames + 1 }, (_, i) => (i * PERIODS[clip]) / frames);
-      const rotations = new Map<THREE.Bone, number[]>();
-      const positions = new Map<THREE.Bone, number[]>();
-      for (const t of times) {
-        this.resetPose();
-        this.play(clip, t);
-        this.root!.updateMatrixWorld(true);
-        const world = new Map(top.map(bone => [bone, bone.matrixWorld.clone()]));
-        // Die Bühne zurück in ihre Lage, damit die Kippung beim Umfallen in den obersten Knochen landet.
-        this.root!.position.copy(this.rootPosition);
-        this.root!.quaternion.copy(this.rootQuaternion);
-        this.root!.updateMatrixWorld(true);
-        for (const bone of this.nodes.keys()) {
-          let q = bone.quaternion;
-          if (world.has(bone)) {
-            const local = bone.parent!.matrixWorld.clone().invert().multiply(world.get(bone)!);
-            const p = new THREE.Vector3(); q = new THREE.Quaternion();
-            local.decompose(p, q, new THREE.Vector3());
-            positions.set(bone, [...(positions.get(bone) ?? []), p.x, p.y, p.z]);
-          }
-          rotations.set(bone, [...(rotations.get(bone) ?? []), q.x, q.y, q.z, q.w]);
+      return { name, times, tracks: this.sample(times, t => this.play(clip, t)) };
+    }));
+  }
+
+  // Aufnahmen aus der Bibliothek ebenso, je mit ihren Einstellungen (Tempo, Anfang und Ende, Spiegeln, an Ort und
+  // Stelle). Die Hüfte bekommt dabei immer eine Spur für ihre Lage, weil die Aufnahme sie hebt, senkt und verschiebt.
+  bakeMotions(takes: MotionTake[], fps = 30): Baked[] {
+    return this.keep(() => takes.map(({ name, motion, options, extras }) => {
+      this.resetPose();
+      this.root!.updateMatrixWorld(true);
+      const retarget = new Retarget(n => this.find(n), motion, options);
+      const frames = Math.max(2, Math.min(999, Math.round(retarget.length * fps)));
+      const times = Array.from({ length: frames + 1 }, (_, i) => (i * retarget.length) / frames);
+      const hips = this.find('Hips');
+      return { name, times, tracks: this.sample(times, t => retarget.apply(t), hips ? [hips] : []), extras };
+    }));
+  }
+
+  // Bühne und Figur nach dem Backen so zurück, wie sie waren (Haltung, laufende Probe oder Aufnahme).
+  private keep<T>(work: () => T): T {
+    const playing = this.clip, motion = this.motion;
+    this.clip = null; this.motion = null;
+    const current = this.bones.map(bone => [bone.quaternion.clone(), bone.position.clone()] as const);
+    const placed = this.root?.position.clone();
+    try {
+      return work();
+    } finally {
+      this.resetPose();
+      this.bones.forEach((bone, i) => { bone.quaternion.copy(current[i][0]); bone.position.copy(current[i][1]); });
+      if (placed) this.root?.position.copy(placed);
+      this.clip = playing; this.motion = motion;
+    }
+  }
+
+  // Für jede Zeit die Figur stellen (pose) und die Drehung jedes Knochens im GLB mitschreiben; die obersten Knochen
+  // (und moving, etwa die Hüfte) dazu mit ihrer Lage. Spuren, die sich nie ändern, fallen weg.
+  private sample(times: number[], pose: (t: number) => void, moving: THREE.Bone[] = []): Track[] {
+    const top = this.bones.filter(bone => (!(bone.parent as THREE.Bone | null)?.isBone || moving.includes(bone)) && this.nodes.has(bone));
+    const rotations = new Map<THREE.Bone, number[]>();
+    const positions = new Map<THREE.Bone, number[]>();
+    for (const t of times) {
+      this.resetPose();
+      pose(t);
+      this.root!.updateMatrixWorld(true);
+      const world = new Map(top.map(bone => [bone, bone.matrixWorld.clone()]));
+      // Die Bühne zurück in ihre Lage, damit die Kippung beim Umfallen in den obersten Knochen landet.
+      this.root!.position.copy(this.rootPosition);
+      this.root!.quaternion.copy(this.rootQuaternion);
+      this.root!.updateMatrixWorld(true);
+      for (const bone of this.nodes.keys()) {
+        let q = bone.quaternion;
+        if (world.has(bone)) {
+          const local = bone.parent!.matrixWorld.clone().invert().multiply(world.get(bone)!);
+          const p = new THREE.Vector3(); q = new THREE.Quaternion();
+          local.decompose(p, q, new THREE.Vector3());
+          if (!positions.has(bone)) positions.set(bone, []);
+          positions.get(bone)!.push(p.x, p.y, p.z);
         }
+        if (!rotations.has(bone)) rotations.set(bone, []);
+        rotations.get(bone)!.push(q.x, q.y, q.z, q.w);
       }
-      const tracks: Track[] = [];
-      const moves = (values: number[], size: number) => values.some((v, i) => Math.abs(v - values[i % size]) > 1e-5);
-      for (const [bone, values] of rotations) if (moves(values, 4)) tracks.push({ node: this.nodes.get(bone)!, path: 'rotation', values });
-      for (const [bone, values] of positions) if (moves(values, 3)) tracks.push({ node: this.nodes.get(bone)!, path: 'translation', values });
-      return { name, times, tracks };
-    });
-    this.resetPose();
-    this.bones.forEach((bone, i) => { bone.quaternion.copy(current[i][0]); bone.position.copy(current[i][1]); });
-    if (placed) this.root?.position.copy(placed);
-    this.clip = playing;
-    return baked;
+    }
+    const tracks: Track[] = [];
+    const moves = (values: number[], size: number) => values.some((v, i) => Math.abs(v - values[i % size]) > 1e-5);
+    for (const [bone, values] of rotations) if (moves(values, 4)) tracks.push({ node: this.nodes.get(bone)!, path: 'rotation', values });
+    for (const [bone, values] of positions) if (moves(values, 3)) tracks.push({ node: this.nodes.get(bone)!, path: 'translation', values });
+    return tracks;
   }
 
   setClip(clip: Clip | null) {
     this.base.clear();
     this.resetPose();
+    if (this.motion) this.recenter();
+    this.motion = null;
     this.clip = clip;
+    this.started = performance.now();
+  }
+
+  // Läuft die Figur mit einer Aufnahme davon, gehen Kamera und Gitter mit: die Kamera um so viel, wie die Hüfte sich
+  // waagrecht bewegt, das Gitter in ganzen Feldern, damit es unter den Füßen stillzustehen scheint.
+  private follow() {
+    const hips = this.find('Hips');
+    if (!hips) return;
+    const at = hips.getWorldPosition(new THREE.Vector3());
+    const shift = new THREE.Vector3(at.x - this.controls.target.x, 0, at.z - this.controls.target.z);
+    this.controls.target.add(shift);
+    this.camera.position.add(shift);
+    const cell = 4 / 16;
+    this.grid.position.set(Math.round(at.x / cell) * cell, 0, Math.round(at.z / cell) * cell);
+  }
+
+  // Kamera und Gitter zurück zur Figur in ihrer Grundhaltung.
+  private recenter() {
+    const shift = new THREE.Vector3(-this.controls.target.x, 0, -this.controls.target.z);
+    this.controls.target.add(shift);
+    this.camera.position.add(shift);
+    this.grid.position.set(0, 0, 0);
+  }
+
+  // Eine Aufnahme aus der Bibliothek abspielen (null hält an). Gemessen wird die Figur in ihrer Grundhaltung.
+  setMotion(motion: Motion | null, options?: MotionOptions) {
+    this.base.clear();
+    this.clip = null;
+    this.resetPose();
+    this.root?.updateMatrixWorld(true);
+    this.motion = motion && options ? new Retarget(name => this.find(name), motion, options) : null;
+    this.recenter();
     this.started = performance.now();
   }
 
@@ -579,6 +651,7 @@ export class RigStage {
     const bone = this.bones[index];
     if (!bone) return;
     this.clip = null;
+    if (this.motion) { this.motion = null; this.recenter(); }
     const [x, y, z] = degrees.map(THREE.MathUtils.degToRad);
     const from = this.base.get(bone) ?? this.rest.get(bone)!;
     bone.quaternion.copy(from).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z)));

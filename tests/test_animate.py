@@ -44,7 +44,7 @@ def test_animations_are_appended_and_the_rest_stays():
 def test_bad_animations_are_refused():
     glb = minimal_glb()
     good = {"name": "Tritt", "times": [0, 1], "tracks": [{"node": 1, "path": "rotation", "values": [0, 0, 0, 1] * 2}]}
-    for clips, message in [([], "Proben"), ([{**good, "times": [1, 0]}], "aufsteigen"),
+    for clips, message in [([], "Animationen"), ([{**good, "times": [1, 0]}], "aufsteigen"),
                            ([{**good, "tracks": [{"node": 7, "path": "rotation", "values": [0] * 8}]}], "Knoten"),
                            ([{**good, "tracks": [{"node": 1, "path": "scale", "values": [0] * 6}]}], "Pfad"),
                            ([{**good, "tracks": [{"node": 1, "path": "rotation", "values": [0] * 5}]}], "Werte")]:
@@ -69,3 +69,14 @@ def test_animated_nodes_lose_their_matrix():
     node = out["nodes"][1]
     assert "matrix" not in node and node["translation"] == [1, 2, 3] and node["scale"] == pytest.approx([2, 2, 2])
     assert node["rotation"] == pytest.approx([0, math.sqrt(0.5), 0, math.sqrt(0.5)])
+
+
+def test_origin_and_licence_travel_with_the_animation():
+    clip = {"name": "Gehen (müde)", "times": [0, 1], "extras": {"source": "Bandai Namco Research Motiondataset",
+                                                               "license": "CC BY-NC 4.0, non-commercial only"},
+            "tracks": [{"node": 1, "path": "rotation", "values": [0, 0, 0, 1] * 2}]}
+    document, _ = animate._chunks(add_animations(minimal_glb(), [clip]))
+    assert document["animations"][0]["extras"]["license"].startswith("CC BY-NC")
+    for extras in [["nein"], {"a": 1}, {f"k{i}": "v" for i in range(9)}, {"k": "x" * 301}]:
+        with pytest.raises(AnimationError, match="extras"):
+            add_animations(minimal_glb(), [{**clip, "extras": extras}])

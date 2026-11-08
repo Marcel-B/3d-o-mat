@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { POSES, RigStage, type Clip, type Facts, type PoseName } from './stage';
 import { PrintPanel } from '../components/PrintPanel';
+import { MotionLibrary } from './MotionLibrary';
 import { useLang } from '../i18n';
 
 const order: Clip[] = ['walk', 'punch', 'kick', 'roundhouse', 'arms', 'squat', 'fall'];
@@ -9,7 +10,7 @@ const poses = Object.keys(POSES) as PoseName[];
 
 // Ein GLB mit Skelett ansehen und bewegen: Proben, Knochen von Hand, Skelett und Drahtgitter.
 export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; scheme: 'light' | 'dark' }) {
-  const { lang, t: { locale, rig: t } } = useLang();
+  const { lang, t: { locale, rig: t, motions } } = useLang();
   // Die Proben heißen im GLB so wie auf der Seite.
   const clips = order.map(clip => [clip, t.clips[clip]] as [Clip, string]);
   const loadFailed = useRef(t.loadFailed);
@@ -35,6 +36,9 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
   const [wire, setWire] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  // Zählt hoch, wenn eine Probe, Haltung oder Knochen von Hand die Aufnahme der Bibliothek ablöst.
+  const [stopKey, setStopKey] = useState(0);
+  const stopLibrary = () => setStopKey(k => k + 1);
 
   useEffect(() => {
     if (!canvas.current) return;
@@ -65,6 +69,7 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
     setClip(value);
     setAngles([0, 0, 0]); turned.current.clear(); setPose(null); setNote(null); setFists([0, 0]);
     stage.current?.setClip(value);
+    stopLibrary();
   }
 
   function turn(axis: number, value: number) {
@@ -72,7 +77,7 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
     next[axis] = value;
     setAngles(next);
     turned.current.set(bone, next);
-    setClip(null);
+    setClip(null); stopLibrary();
     stage.current?.rotate(bone, next);
   }
 
@@ -84,20 +89,21 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
   function reset() {
     setClip(null); setAngles([0, 0, 0]); turned.current.clear(); setPose(null); setNote(null); setFists([0, 0]);
     stage.current?.setClip(null);
+    stopLibrary();
   }
 
   function clench(side: 0 | 1, value: number) {
     const next = [...fists] as [number, number];
     next[side] = value;
     setFists(next);
-    setClip(null);
+    setClip(null); stopLibrary();
     stage.current?.setFist(side ? 'Right' : 'Left', value / 100);
   }
 
   // Eine fertige Haltung oder eine von Gemma; die Schieber fangen danach wieder bei 0 an.
   function hold(name: PoseName | null, angles = name ? POSES[name] : null) {
     if (!angles) return;
-    setClip(null); setAngles([0, 0, 0]); turned.current.clear(); setPose(name);
+    setClip(null); setAngles([0, 0, 0]); turned.current.clear(); setPose(name); stopLibrary();
     setFists([angles.LeftFist?.[0] ?? 0, angles.RightFist?.[0] ?? 0]);
     stage.current?.applyPose(angles);
   }
@@ -152,6 +158,11 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
               <input id="rig-amp" type="range" min={0} max={1.5} step={0.05} value={amp} onChange={e => setAmp(Number(e.target.value))} />
             </label>
           </div>
+          <details open>
+            <summary>{motions.title}</summary>
+            <MotionLibrary stage={() => stage.current} jobId={jobId} stopKey={stopKey}
+              onPlay={() => { setClip(null); setPose(null); setAngles([0, 0, 0]); turned.current.clear(); setFists([0, 0]); }} />
+          </details>
           <details>
             <summary>{t.pose}</summary>
             <div className="row tight">

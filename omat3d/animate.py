@@ -1,4 +1,4 @@
-"""Die Proben des Prüfstands als glTF-Animationen ins GLB mit Skelett, damit Godot (oder Blender) sie mitbekommt.
+"""Animationen ins GLB mit Skelett (die Proben des Prüfstands und Aufnahmen der Bibliothek), damit Godot (oder Blender) sie mitbekommt.
 
 Die Seite rechnet die Keyframes aus (frontend/src/rig/stage.ts, bake) und schickt sie her; hier werden sie an das
 vorhandene GLB angehängt: Daten hinten an den Binärteil, dazu Accessors und je Probe eine Animation. Alles andere,
@@ -43,7 +43,7 @@ def _pad(data: bytes, fill: bytes) -> bytes:
 
 def _check(clips, nodes: int) -> None:
     if not isinstance(clips, list) or not 0 < len(clips) <= MAX_CLIPS:
-        raise AnimationError(f"1 bis {MAX_CLIPS} Proben")
+        raise AnimationError(f"1 bis {MAX_CLIPS} Animationen")
     for clip in clips:
         if not isinstance(clip, dict):
             raise AnimationError("Probe ist kein Objekt")
@@ -53,6 +53,10 @@ def _check(clips, nodes: int) -> None:
         if not isinstance(times, list) or not 2 <= len(times) <= MAX_FRAMES \
                 or not all(isinstance(t, (int, float)) for t in times) or any(b <= a for a, b in zip(times, times[1:])):
             raise AnimationError(f"{clip['name']}: Zeiten müssen aufsteigen, 2 bis {MAX_FRAMES}")
+        extras = clip.get("extras")
+        if extras is not None and (not isinstance(extras, dict) or len(extras) > 8 or not all(
+                isinstance(k, str) and isinstance(v, str) and len(k) <= 40 and len(v) <= 300 for k, v in extras.items())):
+            raise AnimationError(f"{clip['name']}: extras nur als kurze Texte")
         for track in clip.get("tracks") or []:
             size = SIZES.get(track.get("path"))
             node, values = track.get("node"), track.get("values")
@@ -126,7 +130,11 @@ def add_animations(glb: bytes, clips: list) -> bytes:
                              "interpolation": "LINEAR"})
             channels.append({"sampler": len(samplers) - 1, "target": {"node": track["node"], "path": track["path"]}})
         if channels:
-            animations.append({"name": clip["name"].strip(), "samplers": samplers, "channels": channels})
+            animation = {"name": clip["name"].strip(), "samplers": samplers, "channels": channels}
+            # Herkunft und Lizenz einer Aufnahme (Bandai Namco verlangt die Nennung) reisen im GLB mit.
+            if clip.get("extras"):
+                animation["extras"] = dict(clip["extras"])
+            animations.append(animation)
 
     document["buffers"] = [{"byteLength": len(data)}]
     text = _pad(json.dumps(document, separators=(",", ":"), ensure_ascii=False).encode("utf-8"), b" ")
