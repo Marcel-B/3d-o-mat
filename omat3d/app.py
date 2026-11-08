@@ -311,6 +311,21 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         store.delete("jobs", job_id)
         return {"deleted": job_id}
 
+    def model_glb(doc: dict) -> bytes:
+        """The job's GLB. A skeleton from before the fingers were named gets its names the first time it is read
+        and is written back, so Godot, the fist and the animations find them from then on."""
+        try:
+            glb = store.get("jobs", doc["id"], "model.glb")
+        except FileNotFoundError:
+            raise HTTPException(404, "Datei fehlt auf der T7") from None
+        if doc.get("kind") != "rig" or "fingers" in doc:
+            return glb
+        named, fingers = jobs.name_fingers(doc["id"], glb)
+        if named is not glb:
+            store.put("jobs", doc["id"], "model.glb", named)
+        jobs.update(doc["id"], fingers=fingers)
+        return named
+
     @app.get("/api/jobs/{job_id}/model.glb")
     def model(job_id: str, download: bool = False):
         doc = job(job_id)
@@ -318,7 +333,10 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
             raise HTTPException(404, "Noch kein Modell")
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
         suffix = "-skelett" if doc.get("kind") == "rig" else ""
-        return file("jobs", job_id, "model.glb", "model/gltf-binary", f"{name}{suffix}-{job_id}.glb" if download else None)
+        headers = {"cache-control": "private, max-age=86400"}
+        if download:
+            headers["content-disposition"] = f'attachment; filename="{name}{suffix}-{job_id}.glb"'
+        return Response(model_glb(doc), media_type="model/gltf-binary", headers=headers)
 
     @app.post("/api/jobs/{job_id}/animated.glb")
     def animated(job_id: str, request: AnimatedRequest):
@@ -326,9 +344,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         if doc.get("kind") != "rig" or doc["state"] != "done":
             raise HTTPException(409, "Nur ein fertiges Modell mit Skelett bekommt Animationen")
         try:
-            data = add_animations(store.get("jobs", job_id, "model.glb"), request.clips)
-        except FileNotFoundError:
-            raise HTTPException(404, "Datei fehlt auf der T7") from None
+            data = add_animations(model_glb(doc), request.clips)
         except AnimationError as error:
             raise HTTPException(422, str(error)) from error
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
@@ -346,10 +362,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         if request.pose and doc.get("kind") != "rig":
             raise HTTPException(409, "Nur ein Modell mit Skelett hat eine Haltung")
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
-        try:
-            glb = store.get("jobs", job_id, "model.glb")
-        except FileNotFoundError:
-            raise HTTPException(404, "Datei fehlt auf der T7") from None
+        glb = model_glb(doc)
         with printing:
             try:
                 data, info = make_print(glb, request.pose, request.height, request.base, request.format, name)

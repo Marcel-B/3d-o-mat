@@ -201,6 +201,12 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
           <label className="small check"><input id="motion-mirror" type="checkbox" checked={options.mirror} onChange={e => change({ mirror: e.target.checked })} /> {t.mirror}</label>
           <label className="small check" title={t.footLockHint}><input id="motion-feet" type="checkbox" checked={options.footLock} disabled={options.inPlace} onChange={e => change({ footLock: e.target.checked })} /> {t.footLock}</label>
           <label className="small check" title={t.loopHint}><input id="motion-loop" type="checkbox" checked={options.loop} onChange={e => change({ loop: e.target.checked })} /> {t.loop}</label>
+          {stage()?.hasFingers && (
+            <label className="small muted amp" title={t.fistHint}>{t.fist}
+              <input id="motion-fist" type="range" min={0} max={100} step={5} value={Math.round(options.fist * 100)} onChange={e => change({ fist: Number(e.target.value) / 100 })} />
+              <output>{Math.round(options.fist * 100)} %</output>
+            </label>
+          )}
           <label className="small muted amp" title={t.armSpaceHint}>{t.armSpace}
             <input id="motion-arms" type="range" min={-15} max={30} step={1} value={options.armSpace} onChange={e => change({ armSpace: Number(e.target.value) })} />
             <output>{options.armSpace > 0 ? '+' : ''}{options.armSpace}°</output>
@@ -222,6 +228,7 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
                   {take.options.speed !== 1 && ` · ${take.options.speed.toFixed(2)}×`}
                   {take.options.inPlace && ` · ${t.inPlace}`}
                   {take.options.loop && ` · ${t.loop}`}
+                  {take.options.fist > 0 && ` · ${t.fist}`}
                   {nonCommercial(take.clip) && ' · NC'}
                 </span>
                 <button type="button" className="link" onClick={() => setTakes(takes.filter((_, j) => j !== i))}>{t.remove}</button>

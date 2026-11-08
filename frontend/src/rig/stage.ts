@@ -110,6 +110,7 @@ export class RigStage {
   private clip: Clip | null = null;
   // Eine Aufnahme aus der Bibliothek, die gerade läuft (statt einer Probe).
   private motion: Retarget | null = null;
+  private motionFist = 0;
   private started = 0;
   private frame = 0;
   private resizer: ResizeObserver;
@@ -136,7 +137,12 @@ export class RigStage {
     this.resizer.observe(canvas);
     const loop = (now: number) => {
       if (this.clip) { this.resetPose(); this.play(this.clip, (now - this.started) / 1000); }
-      else if (this.motion) { this.resetPose(); this.motion.apply(((now - this.started) / 1000) % this.motion.length); this.follow(); }
+      else if (this.motion) {
+        this.resetPose();
+        this.motion.apply(((now - this.started) / 1000) % this.motion.length);
+        this.fists(this.motionFist);
+        this.follow();
+      }
       this.controls.update();
       this.renderer.render(this.scene, this.camera);
       this.frame = requestAnimationFrame(loop);
@@ -499,6 +505,16 @@ export class RigStage {
     this.fingers.sort((a, b) => depth(a.bone) - depth(b.bone));
   }
 
+  // Beide Hände so weit schließen, auf der Haltung, in der die Figur gerade steht.
+  private fists(amount: number) {
+    if (amount > 0) { this.fist('Left', amount); this.fist('Right', amount); }
+  }
+
+  // Ob das Skelett Fingerknochen hat, die sich zur Faust schließen lassen.
+  get hasFingers() {
+    return this.fingers.length > 0;
+  }
+
   // Die Finger einer Hand zur Faust schließen (amount 0 bis 1); ohne Fingerknochen tut das nichts.
   private fist(side: 'Left' | 'Right', amount: number) {
     for (const { bone, hand, axis, thumb, side: which } of this.fingers) {
@@ -555,7 +571,7 @@ export class RigStage {
       const frames = Math.max(2, Math.min(999, Math.round(retarget.length * fps)));
       const times = Array.from({ length: frames + 1 }, (_, i) => (i * retarget.length) / frames);
       const hips = this.find('Hips');
-      const tracks = this.sample(times, t => retarget.apply(t), hips ? [hips] : [], !!holder);
+      const tracks = this.sample(times, t => { retarget.apply(t); this.fists(options.fist); }, hips ? [hips] : [], !!holder);
       return { name, times, tracks, extras: rootMotion ? { ...extras, rootMotion: holder ? 'armature' : 'none' } : extras };
     }));
   }
@@ -607,9 +623,15 @@ export class RigStage {
       }
     }
     const tracks: Track[] = [];
-    const moves = (values: number[], size: number) => values.some((v, i) => Math.abs(v - values[i % size]) > 1e-5);
-    for (const [bone, values] of rotations) if (moves(values, 4)) tracks.push({ node: this.nodes.get(bone)!, path: 'rotation', values });
-    for (const [bone, values] of positions) if (moves(values, 3)) tracks.push({ node: this.nodes.get(bone)!, path: 'translation', values });
+    // Eine Spur lohnt sich, wenn sich etwas ändert oder der Knochen anders steht als in der Grundhaltung (eine
+    // Faust bleibt die ganze Aufnahme über gleich, ohne Spur wäre die Hand im GLB aber offen).
+    const differs = (values: number[], rest: number[]) => values.some((v, i) => Math.abs(v - rest[i % rest.length]) > 1e-5);
+    for (const [bone, values] of rotations) {
+      if (differs(values, this.rest.get(bone)!.toArray())) tracks.push({ node: this.nodes.get(bone)!, path: 'rotation', values });
+    }
+    for (const [bone, values] of positions) {
+      if (differs(values, this.restPosition.get(bone)!.toArray())) tracks.push({ node: this.nodes.get(bone)!, path: 'translation', values });
+    }
     // Root Motion immer als Spur, auch wenn sie sich kaum bewegt, damit Godot sie in jedem Clip findet (an Ort und
     // Stelle gibt es keine).
     if (armature && this.armature && held.length) tracks.push({ node: this.armature.node, path: 'translation', values: held });
@@ -653,6 +675,7 @@ export class RigStage {
     this.resetPose();
     this.root?.updateMatrixWorld(true);
     this.motion = motion && options ? new Retarget(name => this.find(name), motion, options) : null;
+    this.motionFist = options?.fist ?? 0;
     this.recenter();
     this.started = performance.now();
   }
