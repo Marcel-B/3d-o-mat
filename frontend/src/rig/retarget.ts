@@ -1,8 +1,8 @@
 // Eine Aufnahme (BVH aus der Bewegungsbibliothek, omat3d/motions.py) auf das Skelett der Figur übertragen.
 // Die Knochen der Aufnahme heißen je nach Sammlung anders; sie werden auf Mixamo-Namen abgebildet. Dann wird für jeden
-// Knochen die Ruhehaltung angeglichen (die Richtung zum Kind in beiden Skeletten, so passt eine T-Pose-Aufnahme auch auf
-// eine Figur in A-Pose), jede Drehung relativ zur Ruhehaltung in den Achsen der Szene übertragen und die Hüftbahn mit
-// dem Verhältnis der Beinlängen skaliert. Schaut die Figur anders als die Aufnahme, dreht G die Aufnahme um die
+// Knochen jede Drehung relativ zur Ruhehaltung in den Achsen der Szene übertragen; Arme und Beine werden vorher in
+// ihrer Ruhehaltung angeglichen (die Richtung zum Kind in beiden Skeletten, so passt eine T-Pose-Aufnahme auch auf eine
+// Figur in A-Pose). Die Hüftbahn wird mit dem Verhältnis der Beinlängen skaliert. Schaut die Figur anders als die Aufnahme, dreht G die Aufnahme um die
 // Hochachse auf sie.
 import * as THREE from 'three';
 import { BVHLoader } from 'three/examples/jsm/loaders/BVHLoader.js';
@@ -29,18 +29,25 @@ const NAMES: Record<string, Record<string, string>> = {
 const ORDER = ['Hips', 'Spine', 'Spine1', 'Spine2', 'Neck', 'Head', 'LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand',
   'RightShoulder', 'RightArm', 'RightForeArm', 'RightHand', 'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'LeftToeBase',
   'RightUpLeg', 'RightLeg', 'RightFoot', 'RightToeBase'];
-// Wohin ein Knochen zeigt: zum ersten dieser Kinder, das beide Skelette haben (Bandai hat nur zwei Rückenknochen).
+// Wohin ein Knochen zeigt: zum ersten dieser Kinder, das beide Skelette haben. Nur Arme und Beine werden so an die
+// Aufnahme angeglichen (ihre Ruhehaltung ist Konvention: T- oder A-Pose). Rumpf, Hals, Kopf und Füße behalten ihre
+// Grundhaltung und bekommen nur die Änderung der Aufnahme: aufrecht stehen, geradeaus schauen und flach auf dem Boden
+// stehen beide ohnehin, und wo SkinTokens Hals-, Kopf- und Zehengelenk setzt, sagt nichts über die Haltung. Sonst
+// lehnt eine Figur, deren Kopfgelenk vor dem Halsgelenk liegt, in jeder Aufnahme den Kopf zurück und steht auf den
+// Hacken, wenn ihr Knöchel höher über den Zehen sitzt als in der Aufnahme.
 const CHILD: Record<string, string[]> = {
-  Spine: ['Spine1', 'Spine2', 'Neck'], Spine1: ['Spine2', 'Neck'], Spine2: ['Neck'], Neck: ['Head'],
   LeftShoulder: ['LeftArm'], LeftArm: ['LeftForeArm'], LeftForeArm: ['LeftHand'],
   RightShoulder: ['RightArm'], RightArm: ['RightForeArm'], RightForeArm: ['RightHand'],
-  LeftUpLeg: ['LeftLeg'], LeftLeg: ['LeftFoot'], LeftFoot: ['LeftToeBase'],
-  RightUpLeg: ['RightLeg'], RightLeg: ['RightFoot'], RightFoot: ['RightToeBase'],
+  LeftUpLeg: ['LeftLeg'], LeftLeg: ['LeftFoot'],
+  RightUpLeg: ['RightLeg'], RightLeg: ['RightFoot'],
 };
 // Knochen ohne Kind übernehmen den Ausgleich ihres Elternteils, sonst knickt etwa die Hand gegen den Unterarm ab.
-const PARENT: Record<string, string> = {
-  Head: 'Neck', LeftHand: 'LeftForeArm', RightHand: 'RightForeArm', LeftToeBase: 'LeftFoot', RightToeBase: 'RightFoot',
-};
+const PARENT: Record<string, string> = { LeftHand: 'LeftForeArm', RightHand: 'RightForeArm' };
+// Hals und Kopf folgen der Linie vom Hals- zum Kopfgelenk der Aufnahme (wie sie sich gegen die Ruhehaltung neigt).
+// Die Drehung der Kopfknochen selbst ist in den CMU-Aufnahmen nicht zu gebrauchen: gegen ihre Nullpose ist sie um gut
+// 20 Grad nach hinten gekippt und oft um 20 Grad zur Seite gedreht, obwohl die Linie stillsteht. Ein Blick zur Seite
+// geht damit verloren; die Gehaufnahmen haben keinen.
+const NECK = ['Neck', 'Head'];
 const mirrored = (name: string) => name.replace(/^Left/, '\0').replace(/^Right/, 'Left').replace('\0', 'Right');
 
 // Wie eine Aufnahme abgespielt wird. armSpace: Grad, um die die Arme vom Körper weg (positiv) oder heran gehen;
@@ -363,10 +370,12 @@ export class Retarget {
     const motion = this.motion;
     motion.at(this.options.start + t * this.options.speed);
     const spread = THREE.MathUtils.degToRad(this.options.armSpace || 0);
+    const neck = this.neckSwing();
     for (const name of ORDER) {
       const bone = this.target[name], from = motion.bones[this.source(name)];
       if (!bone || !from || !bone.parent) continue;
-      const delta = this.rotation(worldQ(from).multiply(motion.rest.q[this.source(name)].clone().invert()));
+      const own = worldQ(from).multiply(motion.rest.q[this.source(name)].clone().invert());
+      const delta = this.rotation(neck && NECK.includes(name) ? neck : own);
       let world = delta.multiply(this.align[name]).multiply(this.rest.q[name]);
       if (spread && ARMS.includes(name)) {
         // Der ganze Arm dreht um die Schulter nach außen (alle Knochen des Arms um dieselbe Achse in der Szene).
@@ -395,6 +404,14 @@ export class Retarget {
       }
       bone.updateMatrixWorld(true);
     }
+  }
+
+  // Wie sich die Linie vom Hals- zum Kopfgelenk der Aufnahme gegen ihre Ruhehaltung neigt (in den Achsen der Aufnahme).
+  private neckSwing() {
+    const motion = this.motion, neck = motion.bones[this.source('Neck')], head = motion.bones[this.source('Head')];
+    if (!neck || !head) return null;
+    const rest = motion.rest.p[this.source('Head')].clone().sub(motion.rest.p[this.source('Neck')]).normalize();
+    return new THREE.Quaternion().setFromUnitVectors(rest, worldP(head).sub(worldP(neck)).normalize());
   }
 
   // Für Root Motion: das Objekt über der Hüfte, wenn es mitbewegt wird.
