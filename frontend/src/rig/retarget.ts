@@ -406,12 +406,18 @@ export class Retarget {
     }
   }
 
-  // Wie sich die Linie vom Hals- zum Kopfgelenk der Aufnahme gegen ihre Ruhehaltung neigt (in den Achsen der Aufnahme).
+  // Wie sich Hals und Kopf der Aufnahme gegen ihre Ruhehaltung drehen (in den Achsen der Aufnahme): die Drehung des
+  // Knochens über dem Hals (Brust) und dazu, wie sich die Linie vom Hals- zum Kopfgelenk in dessen Achsen neigt. So
+  // dreht der Kopf mit, wenn die Figur sich wendet, und seine eigene Drehung (siehe NECK) bleibt außen vor.
   private neckSwing() {
     const motion = this.motion, neck = motion.bones[this.source('Neck')], head = motion.bones[this.source('Head')];
     if (!neck || !head) return null;
-    const rest = motion.rest.p[this.source('Head')].clone().sub(motion.rest.p[this.source('Neck')]).normalize();
-    return new THREE.Quaternion().setFromUnitVectors(rest, worldP(head).sub(worldP(neck)).normalize());
+    const chest = Object.keys(motion.bones).find(n => motion.bones[n] === neck.parent) ?? 'Hips';
+    const chestRest = motion.rest.q[chest], chestNow = worldQ(motion.bones[chest]);
+    const rest = motion.rest.p[this.source('Head')].clone().sub(motion.rest.p[this.source('Neck')]).normalize()
+      .applyQuaternion(chestRest.clone().invert());
+    const now = worldP(head).sub(worldP(neck)).normalize().applyQuaternion(chestNow.clone().invert());
+    return chestNow.clone().multiply(new THREE.Quaternion().setFromUnitVectors(rest, now)).multiply(chestRest.clone().invert());
   }
 
   // Für Root Motion: das Objekt über der Hüfte, wenn es mitbewegt wird.

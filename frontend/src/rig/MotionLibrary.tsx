@@ -53,7 +53,7 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
   const found = useMemo(() => {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
     return (index?.clips ?? []).filter(c =>
-      (!source || c.source === source) && (!category || c.category === category) && (!style || c.style === style) &&
+      (!source || c.source === source) && (!category || c.category === category) && (!style || source === 'cmu' || c.style === style) &&
       words.every(w => `${c.de} ${c.en} ${c.styleDe ?? ''} ${c.styleEn ?? ''} ${c.ref}`.toLowerCase().includes(w)));
   }, [index, source, category, style, query]);
 
@@ -151,7 +151,7 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
   return (
     <div className="motions">
       <div className="row tight">
-        <select id="motion-source" value={source} onChange={e => setSource(e.target.value)} aria-label={t.allSources}>
+        <select id="motion-source" value={source} onChange={e => { setSource(e.target.value); if (e.target.value === 'cmu') setStyle(''); }} aria-label={t.allSources}>
           <option value="">{t.allSources}</option>
           {Object.entries(index.sources).map(([id, s]) => (
             <option key={id} value={id}>{s.name.replace(' Graphics Lab Motion Capture Database', '').replace(' Research Motiondataset', '')}{s.commercial ? '' : ` (${t.nonCommercial})`}</option>

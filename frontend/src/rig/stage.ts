@@ -192,7 +192,12 @@ export class RigStage {
     this.bones = []; this.meshes = []; this.rest.clear(); this.base.clear();
     this.root.traverse(object => {
       if ((object as THREE.Bone).isBone) this.bones.push(object as THREE.Bone);
-      if ((object as THREE.SkinnedMesh).isSkinnedMesh) this.meshes.push(object as THREE.SkinnedMesh);
+      if ((object as THREE.SkinnedMesh).isSkinnedMesh) {
+        this.meshes.push(object as THREE.SkinnedMesh);
+        // Die Hüllkugel eines Netzes bleibt bei seiner Grundhaltung; läuft die Figur mit einer Aufnahme davon, verließe
+        // sie den Blick der mitgehenden Kamera, und das Netz würde als unsichtbar übersprungen.
+        object.frustumCulled = false;
+      }
     });
     this.bones.forEach(bone => this.rest.set(bone, bone.quaternion.clone()));
     this.restPosition.clear();
