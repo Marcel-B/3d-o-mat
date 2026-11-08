@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type MotionClip, type MotionIndex } from '../api';
 import { useLang } from '../i18n';
-import { Motion, type MotionOptions } from './retarget';
+import { DEFAULT_OPTIONS, Motion, type MotionOptions } from './retarget';
 import type { MotionTake, RigStage } from './stage';
 
 // Längstens so viel einer Aufnahme geht als eine Animation ins GLB (animate.py: höchstens 1000 Bilder, 30 je Sekunde).
@@ -24,7 +24,8 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
   const [style, setStyle] = useState('');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<MotionClip | null>(null);
-  const [options, setOptions] = useState<MotionOptions>({ speed: 1, inPlace: false, mirror: false, start: 0, end: 1 });
+  const [options, setOptions] = useState<MotionOptions>(DEFAULT_OPTIONS);
+  const [rootMotion, setRootMotion] = useState(false);
   const [loadingClip, setLoadingClip] = useState(false);
   const [takes, setTakes] = useState<Take[]>([]);
   const [exporting, setExporting] = useState(false);
@@ -128,7 +129,7 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
           extras: { source: src?.name ?? clip.source, recording: clip.ref, license: src?.licenseEn ?? '', credit: src?.credit ?? '' },
         });
       }
-      const { blob, name: file } = await api.animatedGlb(jobId, s.bakeMotions(list));
+      const { blob, name: file } = await api.animatedGlb(jobId, s.bakeMotions(list, { rootMotion }));
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
       link.download = file;
@@ -198,6 +199,12 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
           </label>
           <label className="small check"><input id="motion-in-place" type="checkbox" checked={options.inPlace} onChange={e => change({ inPlace: e.target.checked })} /> {t.inPlace}</label>
           <label className="small check"><input id="motion-mirror" type="checkbox" checked={options.mirror} onChange={e => change({ mirror: e.target.checked })} /> {t.mirror}</label>
+          <label className="small check" title={t.footLockHint}><input id="motion-feet" type="checkbox" checked={options.footLock} disabled={options.inPlace} onChange={e => change({ footLock: e.target.checked })} /> {t.footLock}</label>
+          <label className="small check" title={t.loopHint}><input id="motion-loop" type="checkbox" checked={options.loop} onChange={e => change({ loop: e.target.checked })} /> {t.loop}</label>
+          <label className="small muted amp" title={t.armSpaceHint}>{t.armSpace}
+            <input id="motion-arms" type="range" min={-15} max={30} step={1} value={options.armSpace} onChange={e => change({ armSpace: Number(e.target.value) })} />
+            <output>{options.armSpace > 0 ? '+' : ''}{options.armSpace}°</output>
+          </label>
           <button type="button" onClick={add} disabled={loadingClip || takes.length >= MAX_TAKES}>{t.add}</button>
           {takes.length >= MAX_TAKES && <span className="small muted">{t.full}</span>}
         </div>
@@ -214,6 +221,7 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
                   {seconds((take.options.end - take.options.start) / take.options.speed)}
                   {take.options.speed !== 1 && ` · ${take.options.speed.toFixed(2)}×`}
                   {take.options.inPlace && ` · ${t.inPlace}`}
+                  {take.options.loop && ` · ${t.loop}`}
                   {nonCommercial(take.clip) && ' · NC'}
                 </span>
                 <button type="button" className="link" onClick={() => setTakes(takes.filter((_, j) => j !== i))}>{t.remove}</button>
@@ -221,6 +229,9 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
             ))}
           </ul>
           <div className="row tight">
+            {stage()?.canRootMotion && (
+              <label className="small check" title={t.rootMotionHint}><input id="motion-root" type="checkbox" checked={rootMotion} onChange={e => setRootMotion(e.target.checked)} /> {t.rootMotion}</label>
+            )}
             <button type="button" className="primary" onClick={download} disabled={exporting}>{exporting ? t.packing : t.download(takes.length)}</button>
           </div>
           {takes.some(k => nonCommercial(k.clip)) && <div className="small warn">{t.ncWarning}</div>}

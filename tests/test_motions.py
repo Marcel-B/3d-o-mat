@@ -31,10 +31,20 @@ def test_resample_keeps_the_rest_frame_and_takes_every_fourth_of_120():
     assert seconds == pytest.approx(29 / 30) and text.startswith("HIERARCHY")
 
 
+def test_frames_that_are_all_zero_after_the_rest_frame_are_dropped():
+    # CMU 07_12: T-Pose, dann ein Bild nur aus Nullen, dann die Bewegung.
+    text, frames, _seconds = motions.resample(bvh(6, 1 / 30))
+    body = text.split("MOTION")[1].strip().splitlines()
+    assert body[2].split()[1] == "0" and body[3].split()[1] == "1" and frames == 5
+    text, frames, _seconds = motions.resample(bvh(6, 1 / 30), rest="0 0 0 0 0 0 0 0 0")
+    assert frames == 5 and text.split("MOTION")[1].strip().splitlines()[3].split()[1] == "1"
+
+
 def test_a_rest_frame_goes_in_front_and_must_fit():
     text, frames, _seconds = motions.resample(bvh(10, 1 / 30), rest="9 9 9 0 0 0 0 0 0")
     body = text.split("MOTION")[1].strip().splitlines()
-    assert frames == 10 and body[2] == "9 9 9 0 0 0 0 0 0" and body[3].split()[1] == "0"
+    # Bild 0 der kleinen Datei ist ganz null und fällt nach der Ruhehaltung weg (siehe nächster Test).
+    assert frames == 9 and body[2] == "9 9 9 0 0 0 0 0 0" and body[3].split()[1] == "1"
     assert motions.first_frame(bvh(3, 1 / 30)).split()[1] == "0"
     with pytest.raises(motions.MotionError, match="Ruhehaltung"):
         motions.resample(bvh(10, 1 / 30), rest="1 2 3")

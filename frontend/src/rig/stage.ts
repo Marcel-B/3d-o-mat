@@ -12,6 +12,8 @@ export type Track = { node: number; path: 'rotation' | 'translation'; values: nu
 export type Baked = { name: string; times: number[]; tracks: Track[]; extras?: Record<string, string> };
 // Eine Aufnahme aus der Bibliothek, wie sie ins GLB soll: mit Namen, Einstellungen und Herkunft (Lizenz).
 export type MotionTake = { name: string; motion: Motion; options: MotionOptions; extras?: Record<string, string> };
+// Mit Root Motion wandert die Armature waagrecht und die Hüfte bleibt darüber (Godot: Root Motion Track).
+export type BakeOptions = { rootMotion?: boolean; fps?: number };
 // Eine Haltung in Grad je Knochen, [x, y, z] in Worten statt Achsen (wie Gemma sie schreibt, omat3d/assist.py):
 // Rumpf, Hals, Kopf: x nach vorn neigen, y nach links drehen, z zur linken Seite neigen. Oberarm: x heben (0 hängt,
 // 90 waagrecht, 180 senkrecht nach oben), z wohin (0 nach vorn, 90 zur Seite, 180 nach hinten), y um sich selbst drehen.
@@ -102,6 +104,8 @@ export class RigStage {
   private floor = 0;
   // Welcher Knoten des GLB zu welchem Knochen gehört, für den Export der Proben.
   private nodes = new Map<THREE.Bone, number>();
+  // Das Objekt über der Hüfte (in Blender und Godot die Armature), für Root Motion: Knoten im GLB und Grundlage.
+  private armature: { object: THREE.Object3D; node: number; rest: THREE.Vector3 } | null = null;
   private armAngle: Record<string, number> = { LeftArm: Math.PI / 2, RightArm: -Math.PI / 2 };
   private clip: Clip | null = null;
   // Eine Aufnahme aus der Bibliothek, die gerade läuft (statt einer Probe).
@@ -185,6 +189,10 @@ export class RigStage {
       const node = gltf.parser.associations.get(bone)?.nodes;
       if (node !== undefined) this.nodes.set(bone, node);
     });
+    this.armature = null;
+    const above = this.find('Hips')?.parent;
+    const aboveNode = above && !(above as THREE.Bone).isBone && above !== this.root ? gltf.parser.associations.get(above)?.nodes : undefined;
+    if (above && aboveNode !== undefined) this.armature = { object: above, node: aboveNode, rest: above.position.clone() };
     this.measureArms();
     this.helper = new THREE.SkeletonHelper(this.root);
     (this.helper.material as THREE.LineBasicMaterial).depthTest = false;
@@ -533,15 +541,22 @@ export class RigStage {
 
   // Aufnahmen aus der Bibliothek ebenso, je mit ihren Einstellungen (Tempo, Anfang und Ende, Spiegeln, an Ort und
   // Stelle). Die Hüfte bekommt dabei immer eine Spur für ihre Lage, weil die Aufnahme sie hebt, senkt und verschiebt.
-  bakeMotions(takes: MotionTake[], fps = 30): Baked[] {
+  // Mit rootMotion bekommt die Armature (sofern es sie gibt) eine eigene Spur für die waagrechte Bewegung.
+  get canRootMotion() {
+    return !!this.armature;
+  }
+
+  bakeMotions(takes: MotionTake[], { rootMotion = false, fps = 30 }: BakeOptions = {}): Baked[] {
     return this.keep(() => takes.map(({ name, motion, options, extras }) => {
       this.resetPose();
       this.root!.updateMatrixWorld(true);
-      const retarget = new Retarget(n => this.find(n), motion, options);
+      const holder = rootMotion && !options.inPlace ? this.armature?.object ?? null : null;
+      const retarget = new Retarget(n => this.find(n), motion, options, holder);
       const frames = Math.max(2, Math.min(999, Math.round(retarget.length * fps)));
       const times = Array.from({ length: frames + 1 }, (_, i) => (i * retarget.length) / frames);
       const hips = this.find('Hips');
-      return { name, times, tracks: this.sample(times, t => retarget.apply(t), hips ? [hips] : []), extras };
+      const tracks = this.sample(times, t => retarget.apply(t), hips ? [hips] : [], !!holder);
+      return { name, times, tracks, extras: rootMotion ? { ...extras, rootMotion: holder ? 'armature' : 'none' } : extras };
     }));
   }
 
@@ -563,13 +578,15 @@ export class RigStage {
 
   // Für jede Zeit die Figur stellen (pose) und die Drehung jedes Knochens im GLB mitschreiben; die obersten Knochen
   // (und moving, etwa die Hüfte) dazu mit ihrer Lage. Spuren, die sich nie ändern, fallen weg.
-  private sample(times: number[], pose: (t: number) => void, moving: THREE.Bone[] = []): Track[] {
+  private sample(times: number[], pose: (t: number) => void, moving: THREE.Bone[] = [], armature = false): Track[] {
     const top = this.bones.filter(bone => (!(bone.parent as THREE.Bone | null)?.isBone || moving.includes(bone)) && this.nodes.has(bone));
     const rotations = new Map<THREE.Bone, number[]>();
     const positions = new Map<THREE.Bone, number[]>();
+    const held: number[] = [];
     for (const t of times) {
       this.resetPose();
       pose(t);
+      if (armature && this.armature) held.push(...this.armature.object.position.toArray());
       this.root!.updateMatrixWorld(true);
       const world = new Map(top.map(bone => [bone, bone.matrixWorld.clone()]));
       // Die Bühne zurück in ihre Lage, damit die Kippung beim Umfallen in den obersten Knochen landet.
@@ -593,6 +610,9 @@ export class RigStage {
     const moves = (values: number[], size: number) => values.some((v, i) => Math.abs(v - values[i % size]) > 1e-5);
     for (const [bone, values] of rotations) if (moves(values, 4)) tracks.push({ node: this.nodes.get(bone)!, path: 'rotation', values });
     for (const [bone, values] of positions) if (moves(values, 3)) tracks.push({ node: this.nodes.get(bone)!, path: 'translation', values });
+    // Root Motion immer als Spur, auch wenn sie sich kaum bewegt, damit Godot sie in jedem Clip findet (an Ort und
+    // Stelle gibt es keine).
+    if (armature && this.armature && held.length) tracks.push({ node: this.armature.node, path: 'translation', values: held });
     return tracks;
   }
 
@@ -642,6 +662,7 @@ export class RigStage {
       bone.quaternion.copy(this.rest.get(bone)!);
       bone.position.copy(this.restPosition.get(bone)!);
     });
+    this.armature?.object.position.copy(this.armature.rest);
     this.root?.position.copy(this.rootPosition);
     this.root?.quaternion.copy(this.rootQuaternion);
   }
