@@ -5,6 +5,7 @@ import threading
 import time
 from datetime import datetime
 
+from .fingers import FingerError, name_fingers
 from .gate import Gate, GateBusy, GateRefused, StreamBroken
 from .store import NotMounted, Store, StoreError, new_id
 
@@ -19,8 +20,11 @@ def now() -> str:
 
 
 class Jobs:
-    def __init__(self, store: Store, gate: Gate, model: str, defaults: dict, log=print, rig_model: str = "skintokens"):
+    def __init__(self, store: Store, gate: Gate, model: str, defaults: dict, log=print, rig_model: str = "skintokens",
+                 on_finish=None):
         self.store = store
+        # Bekommt jeden Auftrag, der fertig oder fehlgeschlagen ist (Onkel Bummel); muss sofort zurückkehren.
+        self.on_finish = on_finish
         self.gate = gate
         self.model = model
         self.rig_model = rig_model
@@ -119,11 +123,21 @@ class Jobs:
                 continue
             self.process(job["id"])
 
+    def name_fingers(self, job_id: str, glb: bytes) -> tuple[bytes, dict]:
+        """The GLB with Mixamo names on its finger chains and the count per side; a GLB that cannot be read stays as
+        it is, with an empty count, so the job still finishes."""
+        try:
+            return name_fingers(glb)
+        except FingerError as error:
+            self.log(f"{job_id}: Finger nicht benannt: {error}")
+            return glb, {}
+
     def process(self, job_id: str) -> None:
         job = self.update(job_id, state="waiting", started=now(), message="geht an oi-o-mat")
         self.current = job_id
         started = time.monotonic()
         broken = busy = 0
+        finished = None
         try:
             report = None
             if job.get("kind") == "rig":
@@ -156,21 +170,31 @@ class Jobs:
                         raise
                     self.update(job_id, state="waiting", message=f"{error}; neuer Versuch in {int(error.retry_after)} s")
                     self.stop.wait(error.retry_after)
+            fingers = None
+            if job.get("kind") == "rig":
+                # SkinTokens leaves the finger chains unnamed; named, the fist, Gemma and Godot can use them.
+                glb, fingers = self.name_fingers(job_id, glb)
             # launch.py schreibt daneben und benennt dann um: nie ein halbes GLB auf der T7.
             self.store.put("jobs", job_id, "model.glb", glb)
             seconds = round(time.monotonic() - started)
-            self.update(job_id, state="done", finished=now(), seconds=seconds, glbBytes=len(glb), message=None, stage=None,
-                        **({"report": report} if report is not None else {}))
+            finished = self.update(job_id, state="done", finished=now(), seconds=seconds, glbBytes=len(glb), message=None,
+                                   stage=None, **({"report": report} if report is not None else {}),
+                                   **({"fingers": fingers} if fingers is not None else {}))
             self.log(f"{job_id}: fertig in {seconds} s, {len(glb) // 1024} KB")
         except GateRefused as error:
             hint = " Freigeben oder installieren in der Oberfläche der Schranke (/gate)." if error.status in (403, 424) else ""
-            self.update(job_id, state="failed", finished=now(), message=f"{error}.{hint}")
+            finished = self.update(job_id, state="failed", finished=now(), message=f"{error}.{hint}")
             self.log(f"{job_id}: abgewiesen ({error.status}): {error}")
         except Exception as error:  # noqa: BLE001 – jeder Fehler gehört in den Auftrag, nicht in den Arbeiter
-            self.update(job_id, state="failed", finished=now(), message=str(error) or type(error).__name__)
+            finished = self.update(job_id, state="failed", finished=now(), message=str(error) or type(error).__name__)
             self.log(f"{job_id}: fehlgeschlagen: {error!r}")
         finally:
             self.current = None
+        if self.on_finish and finished:
+            try:
+                self.on_finish(finished)
+            except Exception as error:  # noqa: BLE001 – eine Nachricht darf den Arbeiter nicht anhalten
+                self.log(f"{job_id}: Nachricht: {error!r}")
 
     def progress(self, job_id: str, stage, step, total) -> None:
         self.update(job_id, state="running", stage=stage, step=step, total=total, message=None)

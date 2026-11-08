@@ -1,4 +1,4 @@
-"""Die Proben des Prüfstands als glTF-Animationen ins GLB mit Skelett, damit Godot (oder Blender) sie mitbekommt.
+"""Animationen ins GLB mit Skelett (die Proben des Prüfstands und Aufnahmen der Bibliothek), damit Godot (oder Blender) sie mitbekommt.
 
 Die Seite rechnet die Keyframes aus (frontend/src/rig/stage.ts, bake) und schickt sie her; hier werden sie an das
 vorhandene GLB angehängt: Daten hinten an den Binärteil, dazu Accessors und je Probe eine Animation. Alles andere,
@@ -17,7 +17,8 @@ class AnimationError(ValueError):
     pass
 
 
-def _chunks(glb: bytes) -> tuple[dict, bytes]:
+def chunks(glb: bytes) -> tuple[dict, bytes]:
+    """The JSON document and the binary chunk of a GLB."""
     if len(glb) < 20 or glb[:4] != b"glTF":
         raise AnimationError("keine GLB-Datei")
     _magic, version, length = struct.unpack_from("<4sII", glb, 0)
@@ -43,7 +44,7 @@ def _pad(data: bytes, fill: bytes) -> bytes:
 
 def _check(clips, nodes: int) -> None:
     if not isinstance(clips, list) or not 0 < len(clips) <= MAX_CLIPS:
-        raise AnimationError(f"1 bis {MAX_CLIPS} Proben")
+        raise AnimationError(f"1 bis {MAX_CLIPS} Animationen")
     for clip in clips:
         if not isinstance(clip, dict):
             raise AnimationError("Probe ist kein Objekt")
@@ -53,6 +54,10 @@ def _check(clips, nodes: int) -> None:
         if not isinstance(times, list) or not 2 <= len(times) <= MAX_FRAMES \
                 or not all(isinstance(t, (int, float)) for t in times) or any(b <= a for a, b in zip(times, times[1:])):
             raise AnimationError(f"{clip['name']}: Zeiten müssen aufsteigen, 2 bis {MAX_FRAMES}")
+        extras = clip.get("extras")
+        if extras is not None and (not isinstance(extras, dict) or len(extras) > 8 or not all(
+                isinstance(k, str) and isinstance(v, str) and len(k) <= 40 and len(v) <= 300 for k, v in extras.items())):
+            raise AnimationError(f"{clip['name']}: extras nur als kurze Texte")
         for track in clip.get("tracks") or []:
             size = SIZES.get(track.get("path"))
             node, values = track.get("node"), track.get("values")
@@ -92,7 +97,7 @@ def _trs(matrix: list) -> dict:
 
 def add_animations(glb: bytes, clips: list) -> bytes:
     """clips: [{"name", "times": [s], "tracks": [{"node", "path": "rotation"|"translation", "values": [...]}]}]."""
-    document, binary = _chunks(glb)
+    document, binary = chunks(glb)
     _check(clips, len(document.get("nodes") or []))
     if len(document.get("buffers") or []) > 1 or (document.get("buffers") and "uri" in document["buffers"][0]):
         raise AnimationError("GLB mit externen Puffern")
@@ -126,9 +131,19 @@ def add_animations(glb: bytes, clips: list) -> bytes:
                              "interpolation": "LINEAR"})
             channels.append({"sampler": len(samplers) - 1, "target": {"node": track["node"], "path": track["path"]}})
         if channels:
-            animations.append({"name": clip["name"].strip(), "samplers": samplers, "channels": channels})
+            animation = {"name": clip["name"].strip(), "samplers": samplers, "channels": channels}
+            # Herkunft und Lizenz einer Aufnahme (Bandai Namco verlangt die Nennung) reisen im GLB mit.
+            if clip.get("extras"):
+                animation["extras"] = dict(clip["extras"])
+            animations.append(animation)
 
     document["buffers"] = [{"byteLength": len(data)}]
+    return pack(document, bytes(data))
+
+
+def pack(document: dict, binary: bytes) -> bytes:
+    """A GLB from its JSON document and binary chunk."""
     text = _pad(json.dumps(document, separators=(",", ":"), ensure_ascii=False).encode("utf-8"), b" ")
-    body = struct.pack("<II", len(text), 0x4E4F534A) + text + struct.pack("<II", len(data), 0x004E4942) + bytes(data)
+    padded = _pad(binary, b"\0")
+    body = struct.pack("<II", len(text), 0x4E4F534A) + text + struct.pack("<II", len(padded), 0x004E4942) + padded
     return struct.pack("<4sII", b"glTF", 2, 12 + len(body)) + body

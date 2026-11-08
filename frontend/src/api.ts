@@ -1,5 +1,15 @@
 // Die Schnittstelle der Python-App (omat3d/app.py).
 
+// Die Bewegungsbibliothek (omat3d/motions.py): Aufnahmen aus CMU und Bandai Namco, mit Herkunft und Lizenz.
+export type MotionSource = { name: string; license: string; licenseEn: string; commercial: boolean; credit: string; url: string };
+export type MotionClip = {
+  id: string; source: string; de: string; en: string; category: string; style: string | null;
+  styleDe?: string; styleEn?: string; ref: string; frames: number; seconds: number;
+};
+export type MotionIndex = {
+  sources: Record<string, MotionSource>; categories: Record<string, { de: string; en: string }>; clips: MotionClip[];
+};
+
 export type Check = { suitable: boolean; object: string; problems: string[]; tips: string[] };
 
 export type Image = {
@@ -24,6 +34,9 @@ export type Job = {
   kind?: 'rig';
   sourceJobId?: string;
   report?: { joints_raw?: number; naming?: string; weights?: { verts?: number } } | null;
+  // Wie viele Gelenke des Skeletts von Hand verschoben wurden (0 oder fehlt: das Skelett von SkinTokens).
+  skeletonEdited?: number;
+  fingers?: Record<string, number>;
   imageId: string;
   imageName: string | null;
   options: Options;
@@ -73,6 +86,12 @@ export type Painting = {
 
 export type Prompts = { idea: string; prompts: string[]; note: string };
 
+export type PoseAnswer = { text: string; pose: Record<string, [number, number, number]>; note: string };
+
+export type PrintOptions = { pose?: Record<string, [number, number, number, number]>; height: number; base: boolean; format: '3mf' | 'stl' };
+// Wie die Druckdatei entstand: closed = Teile verschmolzen, voxels = über ein Raster geschlossen.
+export type PrintInfo = { method: 'closed' | 'voxels'; triangles: number; volumeCm3: number; sizeMm: [number, number, number] };
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method };
   if (body instanceof FormData) init.body = body;
@@ -107,6 +126,8 @@ export const api = {
   createJob: (imageId: string, options: Options) => call<Job>('POST', '/api/jobs', { imageId, options }),
   rigJob: (id: string, kind: string, seed = 1) => call<Job>('POST', `/api/jobs/${id}/rig`, { class: kind, seed }),
   // Die Proben als Animationen im GLB; zurück kommt die Datei.
+  motions: () => fetch('/api/motions').then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() as Promise<MotionIndex>; }),
+  motionBvh: (id: string) => fetch(`/api/motions/${id}.bvh`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); }),
   animatedGlb: async (id: string, clips: unknown[]) => {
     const response = await fetch(`/api/jobs/${id}/animated.glb`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ clips }),
@@ -118,6 +139,24 @@ export const api = {
     const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? `${id}-proben.glb`;
     return { blob: await response.blob(), name };
   },
+  // Gelenke des Skeletts verschieben (Knoten -> neue Lage) und das Original wiederherstellen.
+  moveJoints: (id: string, moves: Record<string, [number, number, number]>) =>
+    call<{ moved: number; skeletonEdited: number }>('POST', `/api/jobs/${id}/skeleton`, { moves }),
+  resetSkeleton: (id: string) => call<{ skeletonEdited: number }>('POST', `/api/jobs/${id}/skeleton/reset`, {}),
+  // Die Figur als Datei für den 3D-Drucker, in der Haltung, die der Viewer gerade zeigt.
+  printFile: async (id: string, options: PrintOptions) => {
+    const response = await fetch(`/api/jobs/${id}/print`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(options),
+    });
+    if (!response.ok) {
+      const json = await response.json().catch(() => ({}));
+      throw new Error(typeof json.detail === 'string' ? json.detail : `HTTP ${response.status}`);
+    }
+    const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? `${id}.${options.format}`;
+    const info = JSON.parse(response.headers.get('x-print-info') ?? 'null') as PrintInfo | null;
+    return { blob: await response.blob(), name, info };
+  },
+  pose: (text: string, lang: string) => call<PoseAnswer>('POST', '/api/pose', { text, lang }),
   cancelJob: (id: string) => call<Job>('POST', `/api/jobs/${id}/cancel`),
   deleteJob: (id: string) => call('DELETE', `/api/jobs/${id}`),
 };

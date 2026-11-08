@@ -34,6 +34,10 @@ class Config:
     rembg_model: str = "isnet-general-use"
     # So lange darf eine Anfrage an die Schranke dauern, Warten in ihrer Schlange eingeschlossen (dort bis 60 min).
     request_timeout_minutes: int = 75
+    # Nachricht an Onkel Bummel, wenn ein Auftrag fertig ist: url, token oder tokenFile, topic, click (notify.py).
+    onkel_bummel: dict = field(default_factory=dict)
+    # Die Bewegungsbibliothek (python -m omat3d.motions fetch <ordner>); im Docker-Image /app/motions-data.
+    motions_dir: str = str(Path(__file__).resolve().parent.parent / "motions-data")
 
     @property
     def gate_url(self) -> str:
@@ -74,6 +78,7 @@ _KEYS = {
     "listen": "listen", "port": "port", "store": "store", "gate": "gate",
     "trellisModel": "trellis_model", "assistModel": "assist_model", "rigModel": "rig_model", "paintModels": "paint_models", "defaults": "defaults", "cutout": "cutout",
     "rembgModel": "rembg_model", "requestTimeoutMinutes": "request_timeout_minutes",
+    "onkelBummel": "onkel_bummel", "motionsDir": "motions_dir",
 }
 
 

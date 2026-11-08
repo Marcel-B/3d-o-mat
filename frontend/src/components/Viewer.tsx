@@ -2,6 +2,7 @@ import '@google/model-viewer';
 import { useState } from 'react';
 import { api, modelUrl, type Job } from '../api';
 import { RigViewer } from '../rig/RigViewer';
+import { PrintPanel } from './PrintPanel';
 import { useT } from '../i18n';
 
 declare module 'react' {
@@ -56,7 +57,7 @@ export function Viewer({ job, jobs, scheme, onRigStarted }: Props) {
   return (
     <div className="card viewer">
       <h2><span className="step">3</span> {rigged ? t.rigged : t.model}</h2>
-      {ready && rigged ? <RigViewer key={job.id} url={modelUrl(job.id)} jobId={job.id} scheme={scheme} /> : (
+      {ready && rigged ? <RigViewer key={job.id} url={modelUrl(job.id)} jobId={job.id} scheme={scheme} edited={job.skeletonEdited ?? 0} /> : (
       <div className="stage">
         {ready ? (
           <model-viewer key={job.id} src={modelUrl(job.id)} alt={job.imageName ?? t.alt} camera-controls auto-rotate
@@ -75,6 +76,7 @@ export function Viewer({ job, jobs, scheme, onRigStarted }: Props) {
           </span>
         </div>
       )}
+      {ready && !rigged && <PrintPanel key={job.id} jobId={job.id} />}
       {ready && !rigged && (
         <div className="row rig-start">
           <button type="button" onClick={rig} disabled={busy}>{existing ? t.toRigged : busy ? t.starting : failed ? t.retry : t.rig}</button>

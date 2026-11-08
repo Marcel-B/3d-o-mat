@@ -54,6 +54,9 @@ class FakeGate:
                 "3d-o-mat": {"known": True, "held": None, "models": [{"model": "trellis", "state": "aus", "approved": True}]}}})
         if request.url.path == "/v1/chat/completions":
             body = json.loads(request.content)
+            if "Haltung" in str(body["messages"][0]["content"]):
+                return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"pose": {
+                    "LeftArm": [0, 0, 10], "RightFist": [100, 0, 0], "Tail": [1, 2, 3], "RightLeg": [400, 0, "x"]}, "note": "Arm unten"})}}]})
             text = json.dumps({"suitable": True, "object": "rote Scheibe", "problems": [], "tips": ["flach"]}) \
                 if isinstance(body["messages"][0]["content"], list) \
                 else "```json\n" + json.dumps({"prompts": ["a red ceramic disc"], "note": "schlicht"}) + "\n```"
@@ -190,6 +193,25 @@ def test_gemma_check_and_prompts(make):
         assert prompts["prompts"] == ["a red ceramic disc"]
 
 
+def test_gemma_poses_a_figure(make):
+    with make([])[0] as client:
+        pose = client.post("/api/pose", json={"text": "Arme runter"}).json()
+        # Unbekannte Knochen und Werte, die keine Zahlen sind, fallen weg.
+        assert pose == {"text": "Arme runter", "pose": {"LeftArm": [0, 0, 10], "RightFist": [100, 0, 0]}, "note": "Arm unten"}
+        assert client.post("/api/pose", json={"text": ""}).status_code == 422
+
+
+def test_print_file_only_for_finished_models(make):
+    with make([done_stream()])[0] as client:
+        job = wait_for(client, client.post("/api/jobs", json={"imageId": upload(client)["id"]}).json()["id"])
+        assert client.post(f"/api/jobs/{job['id']}/print", json={"pose": {"1": [0, 0, 0, 1]}}).status_code == 409
+        assert client.post(f"/api/jobs/{job['id']}/print", json={"format": "obj"}).status_code == 422
+        assert client.post(f"/api/jobs/{job['id']}/print", json={"height": 1000}).status_code == 422
+        # Das nachgestellte GLB ist keins; echte prüft tests/test_printout.py.
+        refused = client.post(f"/api/jobs/{job['id']}/print", json={})
+        assert refused.status_code == 422 and "GLB" in refused.json()["detail"]
+
+
 def test_gemma_answers_in_the_language_of_the_page(make):
     client, gate = make([])
     with client:
@@ -323,3 +345,67 @@ def test_gate_models_add_what_an_old_config_lacks():
     assert models["krea-2-turbo"]["backend"] == "images"
     assert models["ddalcu/TRELLIS.2-4B-MLX-Serve-8bit"]["ramGb"] == 12
     assert len(config.gate_models()) == len(models)
+
+
+class FakeOnkelBummel:
+    """POST /api/v1/messages wie Onkel Bummel; answers sind die Statuscodes der Reihe nach, danach 201."""
+
+    def __init__(self, answers=()):
+        self.answers = list(answers)
+        self.messages = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/messages"
+        self.messages.append((request.headers, json.loads(request.content)))
+        return httpx.Response(self.answers.pop(0) if self.answers else 201, json={})
+
+
+def wait_for_messages(bummel, count, timeout=10):
+    until = time.time() + timeout
+    while len(bummel.messages) < count and time.time() < until:
+        time.sleep(0.02)
+    return bummel.messages
+
+
+def test_onkel_bummel_hears_of_finished_and_failed_jobs(make):
+    refused = httpx.Response(403, json={"error": {"message": "trellis ist für 3d-o-mat nicht freigegeben"}})
+    client, _ = make([done_stream(), refused])
+    bummel = FakeOnkelBummel()
+    notifier = client.app.state.notifier
+    notifier.settings = {"url": "http://bummel", "token": "ob_test", "topic": "drei-d", "click": "http://3d-o-mat:8090/"}
+    notifier.transport = httpx.MockTransport(bummel)
+    with client:
+        image = upload(client)
+        job = wait_for(client, client.post("/api/jobs", json={"imageId": image["id"]}).json()["id"])
+        headers, message = wait_for_messages(bummel, 1)[0]
+        assert headers["authorization"] == "Bearer ob_test" and headers["idempotency-key"] == f"3d-o-mat-{job['id']}"
+        assert message["topic"] == "drei-d" and message["title"] == "3D-Modell fertig: scheibe" and message["priority"] == 3
+        assert message["click"] == "http://3d-o-mat:8090/"
+        assert base64.b64decode(message["images"][0]["data"]).startswith(b"\x89PNG")
+
+        failed = wait_for(client, client.post("/api/jobs", json={"imageId": image["id"]}).json()["id"])
+        assert failed["state"] == "failed"
+        _, message = wait_for_messages(bummel, 2)[1]
+        assert message["title"] == "3D-Modell fehlgeschlagen: scheibe" and message["priority"] == 4
+        assert "nicht freigegeben" in message["message"]
+
+
+def test_onkel_bummel_retries_its_own_trouble_only(tmp_path):
+    from omat3d.notify import Notifier
+
+    logged = []
+    bummel = FakeOnkelBummel([503, 201])
+    notifier = Notifier({"url": "http://bummel", "token": "ob_x"}, log=logged.append, transport=httpx.MockTransport(bummel))
+    notifier.pause = lambda seconds: None
+    assert notifier.send({"topic": "t", "message": "m"}, "k1") and len(bummel.messages) == 2
+    bummel = FakeOnkelBummel([401])
+    notifier.transport = httpx.MockTransport(bummel)
+    assert not notifier.send({"topic": "t", "message": "m"}, "k2") and len(bummel.messages) == 1
+    assert "401" in logged[-1]
+    (tmp_path / "token").write_text("ob_datei\n")
+    notifier.settings = {"url": "http://bummel", "tokenFile": str(tmp_path / "token")}
+    assert notifier.token() == "ob_datei"
+    notifier.settings = {"url": "http://bummel"}
+    assert not notifier.send({}, "k3") and "kein Token" in logged[-1]
+    # Ohne url bleibt es still.
+    Notifier({}).job_finished({"id": "x", "state": "done"})

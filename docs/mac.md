@@ -29,11 +29,13 @@ git clone https://github.com/Marcel-B/3d-o-mat.git ~/repos/3d-o-mat && cd ~/repo
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt -r requirements-rembg.txt
 (cd frontend && npm ci && npm run build)
+.venv/bin/python -m omat3d.motions fetch motions-data
 ```
 
 - Die virtuelle Umgebung `.venv` hält alle Python-Pakete im Checkout; nichts wird systemweit installiert.
 - `requirements-rembg.txt` bringt rembg mit onnxruntime für das Freistellen von Fotos. Ohne das Paket stellt die App nur einfarbige Hintergründe frei (`cutout: "auto"` merkt das von selbst).
 - `npm run build` legt die Oberfläche in `frontend/dist`. Von dort liefert sie die Python-App unter `/` aus. Nach jedem `git pull`, der etwas in `frontend/` ändert, noch einmal bauen.
+- `omat3d.motions fetch` holt die Bewegungsbibliothek (Aufnahmen von CMU und Bandai Namco, etwa 50 MB) einmal nach `motions-data/` im Checkout, wo die App sie ohne weitere Einstellung findet (`motionsDir`). Sie steht in `.gitignore`. Neu holen braucht es nur, wenn sich `omat3d/motions.py` ändert.
 
 ## 3. Ablage anlegen
 

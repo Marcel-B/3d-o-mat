@@ -16,6 +16,9 @@ WORKDIR /app
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends openssh-client >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt requirements-rembg.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-rembg.txt
+# Die Bewegungsbibliothek (CMU, Bandai Namco) einmal holen; die Schicht bleibt im Cache, bis motions.py sich ändert.
+COPY omat3d/motions.py /tmp/motions.py
+RUN python /tmp/motions.py fetch /app/motions-data && rm /tmp/motions.py
 COPY omat3d/ omat3d/
 COPY store/ store/
 COPY --from=frontend /src/dist frontend/dist

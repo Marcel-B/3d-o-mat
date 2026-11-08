@@ -8,3 +8,4 @@ config.json
 data/
 .DS_Store
 *.tsbuildinfo
+motions-data/

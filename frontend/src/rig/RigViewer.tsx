@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { RigStage, type Clip, type Facts } from './stage';
+import { POSES, RigStage, type Clip, type Facts, type PoseName } from './stage';
+import { PrintPanel } from '../components/PrintPanel';
+import { MotionLibrary } from './MotionLibrary';
 import { useLang } from '../i18n';
 
-const order: Clip[] = ['walk', 'punch', 'kick', 'arms', 'squat', 'fall'];
+const order: Clip[] = ['walk', 'punch', 'kick', 'roundhouse', 'arms', 'squat', 'fall'];
+const poses = Object.keys(POSES) as PoseName[];
 
 // Ein GLB mit Skelett ansehen und bewegen: Proben, Knochen von Hand, Skelett und Drahtgitter.
-export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; scheme: 'light' | 'dark' }) {
-  const { t: { locale, rig: t } } = useLang();
+export function RigViewer({ url, jobId, scheme, edited = 0 }: { url: string; jobId: string; scheme: 'light' | 'dark'; edited?: number }) {
+  const { lang, t: { locale, rig: t, motions } } = useLang();
   // Die Proben heißen im GLB so wie auf der Seite.
   const clips = order.map(clip => [clip, t.clips[clip]] as [Clip, string]);
   const loadFailed = useRef(t.loadFailed);
@@ -20,24 +23,47 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
   const [amp, setAmp] = useState(1);
   const [bone, setBone] = useState(0);
   const [angles, setAngles] = useState<[number, number, number]>([0, 0, 0]);
+  // Was die Schieber je Knochen eingestellt haben, damit ein Wechsel des Knochens nichts verliert.
+  const turned = useRef(new Map<number, [number, number, number]>());
+  const [pose, setPose] = useState<PoseName | null>(null);
+  // Wie fest die Fäuste sind (0 bis 100), links und rechts; nur mit Fingerknochen.
+  const [fists, setFists] = useState<[number, number]>([0, 0]);
+  const [describe, setDescribe] = useState('');
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [poseError, setPoseError] = useState<string | null>(null);
   const [skeleton, setSkeleton] = useState(true);
   const [wire, setWire] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  // Zählt hoch, wenn eine Probe, Haltung oder Knochen von Hand die Aufnahme der Bibliothek ablöst.
+  const [stopKey, setStopKey] = useState(0);
+  const stopLibrary = () => setStopKey(k => k + 1);
+  // Der Gelenk-Editor: an oder aus, gewählter Knochen, wie viele verschoben, Speichern. version lädt das Modell neu,
+  // nachdem das Skelett auf dem Server geändert wurde (an der URL vorbei am Cache des Browsers).
+  const [editing, setEditing] = useState(false);
+  const [joint, setJoint] = useState(-1);
+  const [moved, setMoved] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<number | null>(null);
+  const [jointError, setJointError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
+  const stopEditing = () => { if (stage.current?.editingJoints) { stage.current.editJoints(false); setEditing(false); setJoint(-1); setMoved(0); } };
 
   useEffect(() => {
     if (!canvas.current) return;
     const color = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#0f766e';
     const s = new RigStage(canvas.current, color);
     stage.current = s;
-    setFacts(null); setError(null); setClip(null);
-    s.load(url).then(f => {
+    s.onJointsChanged = () => { setJoint(s.selectedJoint); setMoved(s.movedJoints); };
+    setFacts(null); setError(null); setClip(null); setEditing(false); setJoint(-1); setMoved(0);
+    s.load(version ? `${url}?v=${version}` : url).then(f => {
       setFacts(f);
       const arm = s.bones.indexOf(s.find('LeftArm')!);
       setBone(arm >= 0 ? arm : 0);
     }, e => setError(loadFailed.current((e as Error).message)));
     return () => s.dispose();
-  }, [url]);
+  }, [url, version]);
 
   // Die Knochen in der Akzentfarbe des Farbschemas, auch wenn es umschaltet.
   useEffect(() => {
@@ -49,24 +75,105 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
   useEffect(() => { stage.current?.showSkeleton(skeleton); }, [skeleton, facts]);
   useEffect(() => { stage.current?.wireframe(wire); }, [wire, facts]);
 
+  function toggleEditing() {
+    const s = stage.current;
+    if (!s) return;
+    if (s.editingJoints) return stopEditing();
+    stopLibrary(); setClip(null); setPose(null); setAngles([0, 0, 0]); turned.current.clear(); setNote(null); setFists([0, 0]);
+    s.editJoints(true); setEditing(true); setSaved(null); setJointError(null);
+    s.selectJoint(bone);
+  }
+
+  async function saveJoints() {
+    const s = stage.current;
+    if (!s) return;
+    setSaving(true); setJointError(null);
+    try {
+      const result = await api.moveJoints(jobId, s.jointMoves());
+      setSaved(result.moved);
+      stopEditing();
+      setVersion(v => v + 1);
+    } catch (e) {
+      setJointError(t.jointsFailed((e as Error).message));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function restoreSkeleton() {
+    setSaving(true); setJointError(null);
+    try {
+      await api.resetSkeleton(jobId);
+      stopEditing(); setSaved(null);
+      setVersion(v => v + 1);
+    } catch (e) {
+      setJointError(t.jointsFailed((e as Error).message));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function play(next: Clip) {
+    stopEditing();
     const value = clip === next ? null : next;
     setClip(value);
-    setAngles([0, 0, 0]);
+    setAngles([0, 0, 0]); turned.current.clear(); setPose(null); setNote(null); setFists([0, 0]);
     stage.current?.setClip(value);
+    stopLibrary();
   }
 
   function turn(axis: number, value: number) {
+    stopEditing();
     const next = [...angles] as [number, number, number];
     next[axis] = value;
     setAngles(next);
-    setClip(null);
+    turned.current.set(bone, next);
+    setClip(null); stopLibrary();
     stage.current?.rotate(bone, next);
   }
 
+  function pick(index: number) {
+    setBone(index);
+    setAngles(turned.current.get(index) ?? [0, 0, 0]);
+  }
+
   function reset() {
-    setClip(null); setAngles([0, 0, 0]);
+    stopEditing();
+    setClip(null); setAngles([0, 0, 0]); turned.current.clear(); setPose(null); setNote(null); setFists([0, 0]);
     stage.current?.setClip(null);
+    stopLibrary();
+  }
+
+  function clench(side: 0 | 1, value: number) {
+    stopEditing();
+    const next = [...fists] as [number, number];
+    next[side] = value;
+    setFists(next);
+    setClip(null); stopLibrary();
+    stage.current?.setFist(side ? 'Right' : 'Left', value / 100);
+  }
+
+  // Eine fertige Haltung oder eine von Gemma; die Schieber fangen danach wieder bei 0 an.
+  function hold(name: PoseName | null, angles = name ? POSES[name] : null) {
+    stopEditing();
+    if (!angles) return;
+    setClip(null); setAngles([0, 0, 0]); turned.current.clear(); setPose(name); stopLibrary();
+    setFists([angles.LeftFist?.[0] ?? 0, angles.RightFist?.[0] ?? 0]);
+    stage.current?.applyPose(angles);
+  }
+
+  async function ask() {
+    if (!describe.trim()) return;
+    setAsking(true); setPoseError(null); setNote(null);
+    try {
+      const answer = await api.pose(describe, lang);
+      hold(null, answer.pose);
+      setNote(answer.note);
+    } catch (e) {
+      setPoseError(t.poseFailed((e as Error).message));
+    } finally {
+      setAsking(false);
+    }
   }
 
   // Alle Proben mit der eingestellten Stärke als Animationen ins GLB, für Godot (AnimationPlayer) oder Blender.
@@ -105,15 +212,67 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
               <input id="rig-amp" type="range" min={0} max={1.5} step={0.05} value={amp} onChange={e => setAmp(Number(e.target.value))} />
             </label>
           </div>
+          <details open>
+            <summary>{motions.title}</summary>
+            <MotionLibrary stage={() => stage.current} jobId={jobId} stopKey={stopKey}
+              onPlay={() => { stopEditing(); setClip(null); setPose(null); setAngles([0, 0, 0]); turned.current.clear(); setFists([0, 0]); }} />
+          </details>
+          <details>
+            <summary>{t.pose}</summary>
+            <div className="row tight">
+              {poses.map(name => (
+                <button key={name} type="button" className={pose === name ? 'primary' : ''} aria-pressed={pose === name} onClick={() => hold(name)}>{t.poses[name]}</button>
+              ))}
+            </div>
+            <form className="row tight" onSubmit={e => { e.preventDefault(); ask(); }}>
+              <input id="rig-describe" className="grow" value={describe} maxLength={500} placeholder={t.describe} aria-label={t.describe}
+                onChange={e => setDescribe(e.target.value)} />
+              <button type="submit" disabled={asking || !describe.trim()}>{asking ? t.asking : t.ask}</button>
+            </form>
+            {facts.fingers > 0 && (
+              <div className="row tight">
+                {([t.fistLeft, t.fistRight] as const).map((label, side) => (
+                  <label key={label} className="small muted amp">{label}
+                    <input id={`rig-fist-${side}`} type="range" min={0} max={100} step={5} value={fists[side]}
+                      onChange={e => clench(side as 0 | 1, Number(e.target.value))} />
+                  </label>
+                ))}
+              </div>
+            )}
+            {note && <div className="small muted">{note}</div>}
+            {poseError && <div className="error">{poseError}</div>}
+            <div className="small muted">{t.poseHint}</div>
+          </details>
+          <details open={editing}>
+            <summary>{t.joints}</summary>
+            <div className="row tight">
+              <button type="button" className={editing ? 'primary' : ''} aria-pressed={editing} onClick={toggleEditing}>{t.jointsOn}</button>
+              {editing && (
+                <select id="rig-joint" value={joint} onChange={e => stage.current?.selectJoint(Number(e.target.value))} aria-label={t.jointsPick}>
+                  <option value={-1}>{t.jointsPick}</option>
+                  {stage.current?.bones.map((b, i) => <option key={i} value={i}>{b.name || `${t.bone} ${i}`}</option>)}
+                </select>
+              )}
+              {editing && <button type="button" disabled={joint < 0} onClick={() => stage.current?.mirrorJoint()}>{t.jointsMirror}</button>}
+              {editing && moved > 0 && <button type="button" onClick={() => stage.current?.resetJoints()}>{t.jointsDiscard}</button>}
+              {editing && moved > 0 && <button type="button" className="primary" disabled={saving} onClick={saveJoints}>{saving ? t.jointsSaving : t.jointsSave}</button>}
+              {edited > 0 && !editing && <button type="button" disabled={saving} onClick={restoreSkeleton}>{t.jointsRestore}</button>}
+            </div>
+            <div className="small muted">
+              {editing && moved > 0 ? t.jointsMoved(moved) : saved ? t.jointsSaved(saved) : edited > 0 ? t.jointsEdited(edited) : t.jointsHint}
+            </div>
+            {jointError && <div className="error">{jointError}</div>}
+          </details>
           <details>
             <summary>{t.byHand}</summary>
             <div className="bone-grid">
-              <select id="rig-bone" value={bone} onChange={e => { setBone(Number(e.target.value)); setAngles([0, 0, 0]); }} aria-label={t.bone}>
+              <select id="rig-bone" value={bone} onChange={e => pick(Number(e.target.value))} aria-label={t.bone}>
                 {stage.current?.bones.map((b, i) => <option key={i} value={i}>{b.name || `${t.bone} ${i}`}</option>)}
               </select>
               {(['X', 'Y', 'Z'] as const).map((axis, i) => (
                 <label key={axis} className="axis">{axis}
-                  <input id={`rig-${axis}`} type="range" min={-120} max={120} value={angles[i]} onChange={e => turn(i, Number(e.target.value))} />
+                  <input id={`rig-${axis}`} type="range" min={-120} max={120} value={angles[i]} onChange={e => turn(i, Number(e.target.value))}
+                    onPointerUp={() => stage.current?.ground()} onKeyUp={() => stage.current?.ground()} />
                   <output>{angles[i]}°</output>
                 </label>
               ))}
@@ -132,6 +291,7 @@ export function RigViewer({ url, jobId, scheme }: { url: string; jobId: string; 
             <span className="small muted">{t.downloadHint}</span>
           </div>
           {exportError && <div className="error">{exportError}</div>}
+          <PrintPanel jobId={jobId} pose={() => stage.current?.printPose()} />
           {missing.length > 0 && <div className="small warn">{t.missing(missing.map(m => m.name).join(', '))}</div>}
         </div>
       )}

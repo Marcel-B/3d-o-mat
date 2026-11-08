@@ -1,5 +1,6 @@
 """Die Website: eine JSON-Schnittstelle unter /api und die React-Oberfläche (frontend/dist) unter /. Dateien gehen über
 store.py auf die T7 von oi-o-mat; hier bleibt nur, was gerade im Speicher ist."""
+import json
 import re
 import threading
 from contextlib import asynccontextmanager
@@ -16,7 +17,11 @@ from .animate import AnimationError, add_animations
 from .config import Config
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
 from .jobs import OPEN, Jobs
+from .motions import Library
+from .notify import Notifier
 from .paint import SIZES, Paintings
+from .printout import PrintError, make_print
+from .skeleton import SkeletonError, move_joints
 from .store import NotMounted, Store, StoreError, new_id
 
 MAX_UPLOAD = 40 * 1024 * 1024
@@ -55,8 +60,26 @@ class PaintRequest(BaseModel):
 
 
 class AnimatedRequest(BaseModel):
-    """Die Proben als Keyframes, wie stage.ts bake() sie ausrechnet."""
+    """Proben oder Aufnahmen der Bibliothek als Keyframes, wie stage.ts bake() und bakeMotions() sie ausrechnen."""
     clips: list[dict] = Field(..., min_length=1, max_length=12)
+
+
+class SkeletonRequest(BaseModel):
+    """Gelenke verschieben: Index des Knotens -> neue Lage im Raum seines Elternteils (die translation des Knotens)."""
+    moves: dict[str, list[float]] = Field(..., min_length=1, max_length=200)
+
+
+class PrintRequest(BaseModel):
+    """Druckdatei: pose sind die Drehungen der Knoten (Index -> x, y, z, w), wie der Viewer sie gerade zeigt."""
+    pose: dict[str, list[float]] | None = None
+    height: float = Field(120, ge=20, le=400)
+    base: bool = True
+    format: str = Field("3mf", pattern="^(3mf|stl)$")
+
+
+class PoseRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+    lang: str = Field("de", pattern="^(de|en)$")
 
 
 class PromptRequest(BaseModel):
@@ -74,7 +97,9 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
                log=print) -> FastAPI:
     store = store or make_store(config, log)
     gate = gate or Gate(config.gate_url, config.app_name, config.request_timeout_minutes)
-    jobs = Jobs(store, gate, config.trellis_model, config.defaults, log, rig_model=config.rig_model)
+    notifier = Notifier(config.onkel_bummel, store, log)
+    jobs = Jobs(store, gate, config.trellis_model, config.defaults, log, rig_model=config.rig_model,
+                on_finish=notifier.job_finished)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -90,7 +115,9 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
 
     app = FastAPI(title="3d-o-mat", lifespan=lifespan)
     app.state.jobs = jobs
+    app.state.notifier = notifier
     app.state.store = store
+    library = Library(config.motions_dir)
 
     @app.exception_handler(NotMounted)
     async def not_mounted(_request: Request, error: NotMounted):
@@ -290,6 +317,21 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         store.delete("jobs", job_id)
         return {"deleted": job_id}
 
+    def model_glb(doc: dict) -> bytes:
+        """The job's GLB. A skeleton from before the fingers were named gets its names the first time it is read
+        and is written back, so Godot, the fist and the animations find them from then on."""
+        try:
+            glb = store.get("jobs", doc["id"], "model.glb")
+        except FileNotFoundError:
+            raise HTTPException(404, "Datei fehlt auf der T7") from None
+        if doc.get("kind") != "rig" or "fingers" in doc:
+            return glb
+        named, fingers = jobs.name_fingers(doc["id"], glb)
+        if named is not glb:
+            store.put("jobs", doc["id"], "model.glb", named)
+        jobs.update(doc["id"], fingers=fingers)
+        return named
+
     @app.get("/api/jobs/{job_id}/model.glb")
     def model(job_id: str, download: bool = False):
         doc = job(job_id)
@@ -297,22 +339,103 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
             raise HTTPException(404, "Noch kein Modell")
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
         suffix = "-skelett" if doc.get("kind") == "rig" else ""
-        return file("jobs", job_id, "model.glb", "model/gltf-binary", f"{name}{suffix}-{job_id}.glb" if download else None)
+        headers = {"cache-control": "private, max-age=86400"}
+        if download:
+            headers["content-disposition"] = f'attachment; filename="{name}{suffix}-{job_id}.glb"'
+        return Response(model_glb(doc), media_type="model/gltf-binary", headers=headers)
 
     @app.post("/api/jobs/{job_id}/animated.glb")
     def animated(job_id: str, request: AnimatedRequest):
         doc = job(job_id)
         if doc.get("kind") != "rig" or doc["state"] != "done":
-            raise HTTPException(409, "Nur ein fertiges Modell mit Skelett bekommt Proben")
+            raise HTTPException(409, "Nur ein fertiges Modell mit Skelett bekommt Animationen")
         try:
-            data = add_animations(store.get("jobs", job_id, "model.glb"), request.clips)
-        except FileNotFoundError:
-            raise HTTPException(404, "Datei fehlt auf der T7") from None
+            data = add_animations(model_glb(doc), request.clips)
         except AnimationError as error:
             raise HTTPException(422, str(error)) from error
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
         return Response(data, media_type="model/gltf-binary",
-                        headers={"content-disposition": f'attachment; filename="{name}-proben-{job_id}.glb"'})
+                        headers={"content-disposition": f'attachment; filename="{name}-animiert-{job_id}.glb"'})
+
+    @app.post("/api/jobs/{job_id}/skeleton")
+    def move_skeleton(job_id: str, request: SkeletonRequest):
+        """Verschiebt Gelenke des Skeletts im GLB des Auftrags. Das erste Mal bleibt das Original als
+        skeleton-original.glb daneben liegen, damit „Zurücksetzen“ es wiederherstellen kann."""
+        doc = job(job_id)
+        if doc.get("kind") != "rig" or doc["state"] != "done":
+            raise HTTPException(409, "Nur ein fertiges Modell mit Skelett hat Gelenke")
+        try:
+            moves = {int(k): v for k, v in request.moves.items()}
+        except ValueError:
+            raise HTTPException(422, "Knoten müssen Zahlen sein") from None
+        glb = model_glb(doc)
+        try:
+            changed, count = move_joints(glb, moves)
+        except SkeletonError as error:
+            raise HTTPException(422, str(error)) from error
+        if count:
+            if not doc.get("skeletonEdited"):
+                store.put("jobs", job_id, "skeleton-original.glb", glb)
+            store.put("jobs", job_id, "model.glb", changed)
+            doc = jobs.update(job_id, skeletonEdited=(doc.get("skeletonEdited") or 0) + count)
+        return {"moved": count, "skeletonEdited": doc.get("skeletonEdited") or 0}
+
+    @app.post("/api/jobs/{job_id}/skeleton/reset")
+    def reset_skeleton(job_id: str):
+        doc = job(job_id)
+        if not doc.get("skeletonEdited"):
+            return {"skeletonEdited": 0}
+        try:
+            original = store.get("jobs", job_id, "skeleton-original.glb")
+        except FileNotFoundError:
+            raise HTTPException(404, "Das Original fehlt auf der T7") from None
+        store.put("jobs", job_id, "model.glb", original)
+        jobs.update(job_id, skeletonEdited=0)
+        return {"skeletonEdited": 0}
+
+    # Die Druckdatei rechnet auf der CPU und braucht einige hundert MB; zwei auf einmal wären zu viel für den Container.
+    printing = threading.Lock()
+
+    @app.post("/api/jobs/{job_id}/print")
+    def print_file(job_id: str, request: PrintRequest):
+        doc = job(job_id)
+        if doc["state"] != "done":
+            raise HTTPException(409, "Noch kein Modell")
+        if request.pose and doc.get("kind") != "rig":
+            raise HTTPException(409, "Nur ein Modell mit Skelett hat eine Haltung")
+        name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
+        glb = model_glb(doc)
+        with printing:
+            try:
+                data, info = make_print(glb, request.pose, request.height, request.base, request.format, name)
+            except PrintError as error:
+                raise HTTPException(422, str(error)) from error
+        media = "model/3mf" if request.format == "3mf" else "model/stl"
+        return Response(data, media_type=media, headers={
+            "content-disposition": f'attachment; filename="{name}-druck-{job_id}.{request.format}"',
+            "x-print-info": json.dumps(info),
+        })
+
+    # --- Bewegungsbibliothek (motions.py): Liste und die Aufnahmen als BVH, übertragen wird auf der Seite
+
+    @app.get("/api/motions")
+    def motions():
+        return library.index()
+
+    @app.get("/api/motions/{clip_id}.bvh")
+    def motion(clip_id: str):
+        try:
+            text = library.bvh(clip_id)
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(404, "Keine solche Aufnahme") from None
+        return Response(text, media_type="text/plain; charset=utf-8", headers={"cache-control": "public, max-age=604800"})
+
+    @app.post("/api/pose")
+    def pose(request: PoseRequest):
+        try:
+            return assist.pose_from_text(gate, config.assist_model, request.text, request.lang)
+        except ValueError as error:
+            raise HTTPException(502, str(error)) from error
 
     if FRONTEND.is_dir():
         app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")
