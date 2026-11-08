@@ -188,8 +188,13 @@ def resample(text: str, rest: str | None = None, fps: int = FPS) -> tuple[str, i
         if len(rest.split()) != len(frames[0].split()):
             raise MotionError("Ruhehaltung passt nicht zum Skelett")
         frames = [rest, *frames]
+    # Manche Aufnahmen (CMU 07_12) beginnen nach der Ruhehaltung mit einem Bild, in dem alles null ist; das würde die
+    # Figur im ersten Bild auf den Ursprung ziehen und die Lage der Hüfte falsch messen.
+    first = 1
+    while first < len(frames) - 1 and all(float(v) == 0 for v in frames[first].split()):
+        first += 1
     every = max(1, round(1 / (step * fps)))
-    kept = [frames[0], *frames[1::every]]
+    kept = [frames[0], *frames[first::every]]
     if len(kept) < 3:
         raise MotionError("zu wenige Bilder")
     short = [" ".join(_number(v) for v in frame.split()) for frame in kept]

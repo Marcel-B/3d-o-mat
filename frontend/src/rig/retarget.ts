@@ -43,7 +43,50 @@ const PARENT: Record<string, string> = {
 };
 const mirrored = (name: string) => name.replace(/^Left/, '\0').replace(/^Right/, 'Left').replace('\0', 'Right');
 
-export type MotionOptions = { speed: number; inPlace: boolean; mirror: boolean; start: number; end: number };
+// Wie eine Aufnahme abgespielt wird. armSpace: Grad, um die die Arme vom Körper weg (positiv) oder heran gehen;
+// footLock: Füße am Boden festhalten; loop: das Ende weich in den Anfang führen.
+export type MotionOptions = {
+  speed: number; inPlace: boolean; mirror: boolean; start: number; end: number;
+  armSpace: number; footLock: boolean; loop: boolean;
+};
+export const DEFAULT_OPTIONS: MotionOptions = {
+  speed: 1, inPlace: false, mirror: false, start: 0, end: 1, armSpace: 0, footLock: true, loop: false,
+};
+// Bilder je Sekunde, in denen Bodenkontakte gesucht und Schleifen geglättet werden (wie der Export).
+const FPS = 30;
+const ARMS = ['LeftArm', 'LeftForeArm', 'LeftHand', 'RightArm', 'RightForeArm', 'RightHand'];
+const LEGS = [['LeftUpLeg', 'LeftLeg', 'LeftFoot'], ['RightUpLeg', 'RightLeg', 'RightFoot']] as const;
+
+// Zwei Knochen (Oberschenkel, Schienbein) so drehen, dass das Ende (Knöchel) auf target liegt; das Knie bleibt in
+// seiner Ebene und knickt nach vorn (bend), wenn das Bein gestreckt war. Der Fuß behält seine Lage im Raum.
+function reach(upper: THREE.Bone, lower: THREE.Bone, end: THREE.Bone, target: THREE.Vector3, bend: THREE.Vector3) {
+  const a = worldP(upper), b = worldP(lower), c = worldP(end);
+  const footWorld = worldQ(end);
+  const lab = b.distanceTo(a), lcb = c.distanceTo(b);
+  const lat = THREE.MathUtils.clamp(target.distanceTo(a), 0.01 * (lab + lcb), (lab + lcb) * 0.9995);
+  const angle = (u: THREE.Vector3, v: THREE.Vector3) => u.clone().normalize().angleTo(v.clone().normalize());
+  const clampCos = (x: number) => Math.acos(THREE.MathUtils.clamp(x, -1, 1));
+  const ac = c.clone().sub(a), ab = b.clone().sub(a);
+  const acAb = angle(ac, ab), baBc = angle(a.clone().sub(b), c.clone().sub(b));
+  const acAb1 = clampCos((lcb * lcb - lab * lab - lat * lat) / (-2 * lab * lat));
+  const baBc1 = clampCos((lat * lat - lab * lab - lcb * lcb) / (-2 * lab * lcb));
+  let axis = new THREE.Vector3().crossVectors(ac, ab);
+  if (axis.lengthSq() < 1e-10) axis = new THREE.Vector3().crossVectors(ab, bend);
+  if (axis.lengthSq() < 1e-10) return;
+  axis.normalize();
+  const turn = (bone: THREE.Bone, rot: THREE.Quaternion) => {
+    bone.parent!.updateWorldMatrix(true, false);
+    const world = rot.multiply(worldQ(bone));
+    bone.quaternion.copy(worldQ(bone.parent!).invert().multiply(world));
+    bone.updateMatrixWorld(true);
+  };
+  turn(upper, new THREE.Quaternion().setFromAxisAngle(axis, acAb1 - acAb));
+  turn(lower, new THREE.Quaternion().setFromAxisAngle(axis, baBc1 - baBc));
+  const reached = worldP(end).sub(a);
+  turn(upper, new THREE.Quaternion().setFromUnitVectors(reached.normalize(), target.clone().sub(a).normalize()));
+  end.quaternion.copy(worldQ(lower).invert().multiply(footWorld));
+  end.updateMatrixWorld(true);
+}
 
 type Rest = { q: Record<string, THREE.Quaternion>; p: Record<string, THREE.Vector3> };
 
@@ -118,8 +161,19 @@ export class Retarget {
   // Spiegeln an der Ebene, die die Figur in links und rechts teilt (Normale: ihre Querachse).
   private normal = new THREE.Vector3(1, 0, 0);
   private scale = 1;
+  // Vorwärts (aus den Zehen, sonst quer zur Hüfte) für das Knie, und je Seite die Achse, um die ein Arm nach außen geht.
+  private ahead = new THREE.Vector3(0, 0, 1);
+  private outward: Record<string, THREE.Vector3> = {};
+  // Die Grundhaltung der übertragenen Knochen (lokal), um zwischendurch zu ihr zurückzukehren.
+  private restLocal: Record<string, [THREE.Quaternion, THREE.Vector3]> = {};
+  // Bodenkontakt je Bild und Fuß: wie stark (0 bis 1) und wo der Knöchel festgehalten wird.
+  private locks: { weight: number; at: THREE.Vector3 }[][] = [];
+  // Root Motion: die waagrechte Bewegung geht auf das Objekt über der Hüfte (Armature) statt auf die Hüfte.
+  private holder: THREE.Object3D | null = null;
+  private holderRest = new THREE.Vector3();
 
-  constructor(find: (name: string) => THREE.Bone | undefined, private motion: Motion, private options: MotionOptions) {
+  constructor(find: (name: string) => THREE.Bone | undefined, private motion: Motion, private options: MotionOptions,
+    holder: THREE.Object3D | null = null) {
     for (const name of ORDER) {
       const bone = find(name);
       if (bone) this.target[name] = bone;
@@ -128,6 +182,11 @@ export class Retarget {
     this.target.Hips.parent?.updateMatrixWorld(true);
     this.target.Hips.updateMatrixWorld(true);
     this.rest = measure(this.target);
+    for (const [name, bone] of Object.entries(this.target)) this.restLocal[name] = [bone.quaternion.clone(), bone.position.clone()];
+    if (holder && !options.inPlace && holder === this.target.Hips.parent) {
+      this.holder = holder;
+      this.holderRest.copy(holder.position);
+    }
     const feet = ['LeftFoot', 'RightFoot'].filter(n => this.rest.p[n]).map(n => this.rest.p[n].y);
     this.ankle = feet.length ? Math.min(...feet) : 0;
     this.hipHeight = this.rest.p.Hips.y - this.ankle || 1;
@@ -136,6 +195,16 @@ export class Retarget {
     this.G.setFromUnitVectors(facing(motion.rest.p), ahead);
     this.Gi.copy(this.G).invert();
     this.normal.crossVectors(new THREE.Vector3(0, 1, 0), ahead).normalize();
+    const foot = this.rest.p.LeftFoot, toe = this.rest.p.LeftToeBase;
+    const forward = foot && toe ? toe.clone().sub(foot).setY(0) : new THREE.Vector3();
+    this.ahead.copy(forward.lengthSq() > 1e-8 ? forward.normalize() : ahead);
+    for (const side of ['Left', 'Right']) {
+      const shoulder = this.rest.p[`${side}Arm`];
+      if (!shoulder) continue;
+      const out = shoulder.clone().sub(this.rest.p.Hips).setY(0).normalize();
+      // Um diese Achse gedreht, geht ein herabhängender Arm (nach unten) zur Seite hin (nach außen).
+      this.outward[side] = new THREE.Vector3().crossVectors(new THREE.Vector3(0, -1, 0), out).normalize();
+    }
     for (const name of ORDER) {
       if (!this.target[name]) continue;
       const from = this.source(name);
@@ -148,6 +217,7 @@ export class Retarget {
         this.align[name] = PARENT[name] && this.align[PARENT[name]] ? this.align[PARENT[name]].clone() : new THREE.Quaternion();
       }
     }
+      if (options.footLock && !options.inPlace) this.findContacts();
   }
 
   // Von welchem Knochen der Aufnahme ein Knochen der Figur seine Bewegung bekommt (gespiegelt: von der anderen Seite).
@@ -179,23 +249,154 @@ export class Retarget {
   // Die Figur so stellen, wie die Aufnahme sie zur Zeit t (Sekunden der Wiedergabe) zeigt. Die Figur muss vorher in
   // ihrer Grundhaltung stehen.
   apply(t: number) {
+    this.pose(t);
+    const blend = Math.min(0.4, this.length / 4);
+    if (!this.options.loop || t <= this.length - blend) return;
+    // Schleife: in den letzten Bruchteilen einer Sekunde weich in das erste Bild überblenden, damit beim Neubeginn
+    // nichts springt. Die waagrechte Lage der Hüfte bleibt (sonst liefe die Figur zurück), außer an Ort und Stelle.
+    const u = (t - (this.length - blend)) / blend, w = u * u * (3 - 2 * u);
+    const end = this.capture();
+    this.reset();
+    this.pose(0);
+    const start = this.capture();
+    for (const [name, bone] of Object.entries(this.target)) {
+      bone.quaternion.copy(end[name][0]).slerp(start[name][0], w);
+      if (name === 'Hips') {
+        const p = end[name][1].clone().lerp(start[name][1], w);
+        if (!this.options.inPlace && !this.holder) {
+          // nur die Höhe überblenden: in den Achsen der Szene, dann zurück ins Elternteil
+          const parent = bone.parent!;
+          parent.updateWorldMatrix(true, false);
+          const worldEnd = parent.localToWorld(end[name][1].clone()), worldMix = parent.localToWorld(p.clone());
+          worldEnd.y = worldMix.y;
+          p.copy(parent.worldToLocal(worldEnd));
+        }
+        bone.position.copy(p);
+      }
+    }
+    if (this.holder) this.holder.position.copy(end.holder![1]);
+    this.target.Hips.updateMatrixWorld(true);
+  }
+
+  private capture() {
+    const out: Record<string, [THREE.Quaternion, THREE.Vector3]> = {};
+    for (const [name, bone] of Object.entries(this.target)) out[name] = [bone.quaternion.clone(), bone.position.clone()];
+    if (this.holder) out.holder = [this.holder.quaternion.clone(), this.holder.position.clone()];
+    return out;
+  }
+
+  private reset() {
+    for (const [name, [q, p]] of Object.entries(this.restLocal)) { this.target[name].quaternion.copy(q); this.target[name].position.copy(p); }
+    if (this.holder) this.holder.position.copy(this.holderRest);
+    this.target.Hips.updateMatrixWorld(true);
+  }
+
+  // Übertragen, dann die Füße auf den Boden und, wo sie Kontakt haben, an ihren Platz.
+  private pose(t: number) {
+    this.raw(t);
+    this.ground();
+    if (!this.locks.length) return;
+    const frame = this.locks[Math.max(0, Math.min(this.locks.length - 1, Math.round(t * FPS)))];
+    LEGS.forEach(([up, leg, foot], side) => {
+      const lock = frame[side];
+      const [a, b, c] = [this.target[up], this.target[leg], this.target[foot]];
+      if (!lock || lock.weight <= 0 || !a || !b || !c) return;
+      const target = worldP(c).lerp(lock.at, lock.weight);
+      reach(a, b, c, target, this.ahead);
+    });
+  }
+
+  // Sinkt ein Knöchel unter seine Höhe in der Grundhaltung, hebt die Hüfte die Figur um so viel an.
+  private ground() {
+    const ankles = LEGS.map(([, , foot]) => this.target[foot]).filter(Boolean).map(b => worldP(b).y);
+    if (!ankles.length) return;
+    const deficit = this.ankle - Math.min(...ankles);
+    if (deficit <= 1e-4) return;
+    const hips = this.target.Hips;
+    hips.parent!.updateWorldMatrix(true, false);
+    hips.position.copy(hips.parent!.worldToLocal(worldP(hips).add(new THREE.Vector3(0, deficit, 0))));
+    hips.updateMatrixWorld(true);
+  }
+
+  // Einmal durch die Aufnahme: wann steht welcher Fuß (Knöchel tief und fast still)? Dort wird er an der Stelle
+  // festgehalten, an der er aufsetzt; drei Bilder davor und danach blendet das weich ein und aus.
+  private findContacts() {
+    const frames = Math.max(2, Math.round(this.length * FPS) + 1);
+    const ankles: THREE.Vector3[][] = [];
+    for (let i = 0; i < frames; i++) {
+      this.reset();
+      this.raw(i / FPS);
+      this.ground();
+      ankles.push(LEGS.map(([, , foot]) => (this.target[foot] ? worldP(this.target[foot]) : new THREE.Vector3())));
+    }
+    this.reset();
+    const high = 0.07 * this.hipHeight, slow = 0.6 * this.hipHeight / FPS;
+    const ramp = 3;
+    this.locks = Array.from({ length: frames }, () => [{ weight: 0, at: new THREE.Vector3() }, { weight: 0, at: new THREE.Vector3() }]);
+    for (let side = 0; side < 2; side++) {
+      const down = ankles.map((frame, i) => {
+        const prev = ankles[Math.max(0, i - 1)][side], next = ankles[Math.min(frames - 1, i + 1)][side];
+        const speed = Math.hypot(next.x - prev.x, next.z - prev.z) / Math.max(1, Math.min(frames - 1, i + 1) - Math.max(0, i - 1));
+        return frame[side].y - this.ankle < high && speed < slow;
+      });
+      for (let i = 0; i < frames;) {
+        if (!down[i]) { i++; continue; }
+        let j = i;
+        while (j + 1 < frames && down[j + 1]) j++;
+        if (j - i >= 2) {
+          const at = ankles[i][side].clone();
+          at.y = Math.max(this.ankle, Math.min(at.y, ...ankles.slice(i, j + 1).map(f => f[side].y)));
+          for (let k = Math.max(0, i - ramp); k <= Math.min(frames - 1, j + ramp); k++) {
+            const w = k < i ? 1 - (i - k) / (ramp + 1) : k > j ? 1 - (k - j) / (ramp + 1) : 1;
+            if (w > this.locks[k][side].weight) this.locks[k][side] = { weight: w, at };
+          }
+        }
+        i = j + 1;
+      }
+    }
+  }
+
+  // Die reine Übertragung ohne Füße: Drehungen in den Achsen der Szene, Hüfte nach Beinlänge, Arme nach armSpace.
+  private raw(t: number) {
     const motion = this.motion;
     motion.at(this.options.start + t * this.options.speed);
+    const spread = THREE.MathUtils.degToRad(this.options.armSpace || 0);
     for (const name of ORDER) {
       const bone = this.target[name], from = motion.bones[this.source(name)];
       if (!bone || !from || !bone.parent) continue;
       const delta = this.rotation(worldQ(from).multiply(motion.rest.q[this.source(name)].clone().invert()));
-      const world = delta.multiply(this.align[name]).multiply(this.rest.q[name]);
+      let world = delta.multiply(this.align[name]).multiply(this.rest.q[name]);
+      if (spread && ARMS.includes(name)) {
+        // Der ganze Arm dreht um die Schulter nach außen (alle Knochen des Arms um dieselbe Achse in der Szene).
+        const axis = this.outward[name.startsWith('Left') ? 'Left' : 'Right'];
+        if (axis) world = new THREE.Quaternion().setFromAxisAngle(axis, spread).multiply(world);
+      }
       bone.parent.updateWorldMatrix(true, false);
       bone.quaternion.copy(worldQ(bone.parent).invert().multiply(world));
       if (name === 'Hips') {
         const now = worldP(from);
         const moved = this.direction(now.clone().sub(motion.frame0)).multiplyScalar(this.scale);
         const at = new THREE.Vector3(this.rest.p.Hips.x, this.ankle + (now.y - motion.ankle0) * this.scale, this.rest.p.Hips.z);
-        if (!this.options.inPlace) at.add(new THREE.Vector3(moved.x, 0, moved.z));
+        if (!this.options.inPlace) {
+          if (this.holder) {
+            // Root Motion: das Objekt über der Hüfte wandert waagrecht, die Hüfte darin nur noch auf und ab.
+            const parent = this.holder.parent!;
+            parent.updateWorldMatrix(true, false);
+            const restWorld = parent.localToWorld(this.holderRest.clone());
+            this.holder.position.copy(parent.worldToLocal(restWorld.add(new THREE.Vector3(moved.x, 0, moved.z))));
+            this.holder.updateMatrixWorld(true);
+          }
+          at.add(new THREE.Vector3(moved.x, 0, moved.z));
+        }
+        bone.parent.updateWorldMatrix(true, false);
         bone.position.copy(bone.parent.worldToLocal(at));
       }
       bone.updateMatrixWorld(true);
     }
+  }
+
+  // Für Root Motion: das Objekt über der Hüfte, wenn es mitbewegt wird.
+  get mover() {
+    return this.holder;
   }
 }
