@@ -39,8 +39,13 @@ Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schran
 
 5. **Skelett einsetzen (optional):** Unter einem fertigen Modell setzt „Skelett einsetzen“ Knochen und Gewichte ein. Dafür läuft SkinTokens auf oi-o-mat, etwa 35 Sekunden und höchstens 8 GB. Das Ergebnis ist ein eigener Auftrag. Das Skelett hängt vom Seed ab. Kann SkinTokens es nicht als Mensch benennen (etwa: keine Brust mit Armen auf beiden Seiten gefunden), probiert der Rig-Dienst die nächsten Seeds, bis zu drei je Auftrag (`humanoidTries` in `rig.json`). Ein neuer Versuch auf der Seite fängt bei den nächsten drei an.
    - Bei „Mensch“ tragen die Knochen Mixamo-Namen. Animationen von Mixamo (Without Skin) passen dann direkt, etwa in Godot oder Unity.
-   - Der Viewer zeigt die Figur mit Proben (Gehen, Schlag mit Faust, Tritt, Drehtritt, Arme heben, Kniebeuge, Umfallen), Schiebern für einzelne Knochen und dem Befund, welche Mixamo-Knochen gefunden wurden.
-   - „GLB mit Proben herunterladen“ hängt die sieben Proben als glTF-Animationen an das GLB (30 Bilder je Sekunde, eine Runde je Probe, mit der eingestellten Stärke). In Godot erscheinen sie im `AnimationPlayer` als „Gehen“, „Tritt“, „Umfallen“ usw., in Blender als Aktionen. Netz, Texturen und Skelett bleiben unverändert; nur bewegte Knoten, die als Matrix gespeichert sind, werden in Lage, Drehung und Größe zerlegt, weil glTF das für Animationen verlangt. Die Proben sind Prüfbewegungen; für ein Spiel passen Mixamo-Animationen über Godots Retargeting besser.
+   - Der Viewer zeigt die Figur mit Proben (Gehen, Schlag mit Faust, Tritt, Drehtritt, Arme heben, Kniebeuge, Umfallen), Schiebern für einzelne Knochen dem Befund, welche Mixamo-Knochen gefunden wurden, und der Bewegungsbibliothek (siehe unten).
+   - „GLB mit Proben herunterladen“ hängt die sieben Proben als glTF-Animationen an das GLB (30 Bilder je Sekunde, eine Runde je Probe, mit der eingestellten Stärke). In Godot erscheinen sie im `AnimationPlayer` als „Gehen“, „Tritt“, „Umfallen“ usw., in Blender als Aktionen. Netz, Texturen und Skelett bleiben unverändert; nur bewegte Knoten, die als Matrix gespeichert sind, werden in Lage, Drehung und Größe zerlegt, weil glTF das für Animationen verlangt. Die Proben sind gerechnete Prüfbewegungen; für ein Spiel sind die Aufnahmen aus der Bibliothek besser.
+   - **Animationen aus der Bibliothek:** 244 echte Bewegungsaufnahmen (Motion Capture) aus zwei freien Sammlungen, nach Quelle, Art (Gehen, Laufen, Springen, Kämpfen, Tanzen, Gesten, Alltag, Akrobatik), Stil und Text zu suchen. Ein Klick spielt die Aufnahme auf der eigenen Figur ab; die Kamera geht mit, wenn die Figur losläuft. Einstellbar sind Tempo, Anfang und Ende, „An Ort und Stelle“ (die Hüfte bleibt über dem Startpunkt, wie für ein Spiel mit eigener Steuerung) und Spiegeln (links und rechts getauscht). „Zur Auswahl“ sammelt bis zu 12, „GLB mit … Animationen herunterladen“ hängt sie wie die Proben an (je höchstens 33 s). Jede Animation trägt in `extras` Quelle, Aufnahme und Lizenz.
+     - Übertragen wird auf der Seite (`frontend/src/rig/retarget.ts`): Die Knochen der Aufnahme werden auf Mixamo-Namen abgebildet, für jeden Knochen wird die Ruhehaltung angeglichen (Richtung zum Kind in beiden Skeletten; so passt eine T-Pose-Aufnahme auch auf eine Figur in A-Pose), jede Drehung relativ zur Ruhehaltung in den Achsen der Szene übertragen und die Hüftbahn mit dem Verhältnis der Beinlängen skaliert. Schaut die Figur in eine andere Richtung als die Aufnahme, wird die Aufnahme um die Hochachse gedreht.
+     - **CMU Graphics Lab Motion Capture Database** (69 ausgewählte Aufnahmen, BVH-Fassung von B. Hahne): frei nutzbar, auch in verkauften Spielen; nur die Daten selbst darf man nicht verkaufen.
+     - **Bandai Namco Research Motiondataset 1** (alle 175 Aufnahmen: Gehen, Laufen, Gesten in bis zu 15 Stilen wie müde, fröhlich, alt, dazu Schlag, Tritt, Tanz): **CC BY-NC 4.0, nur nichtkommerziell** und mit Nennung. Die Liste markiert sie mit „NC“, die Auswahl warnt.
+     - Noch nicht dabei: Füße, die bei großen Unterschieden im Körperbau leicht rutschen, festhalten; Hände, die bei kräftigen Figuren in den Körper gehen, nach außen schieben; Schleifen ohne Sprung am Ende.
 
 6. **Für den 3D-Druck (optional):** Unter jedem fertigen Modell macht „Für den 3D-Druck“ eine Datei für den Slicer: 3MF (Bambu Studio, PrusaSlicer, OrcaSlicer, Cura) oder STL, in Millimetern, mit wählbarer Höhe (20 bis 400 mm) und auf Wunsch mit rundem Sockel. Gerechnet wird im Container auf der CPU (`omat3d/printout.py`), ohne Modell auf oi-o-mat:
    - Bei einem Modell mit Skelett zählt die Haltung, die der Viewer gerade zeigt. Die Seite schickt die Drehung jedes Knochens; der Server bewegt die Punkte mit den Gewichten aus SkinTokens mit (Linear Blend Skinning, wie three.js) und stellt den tiefsten Punkt auf den Boden.
@@ -117,6 +122,7 @@ Das Skript erledigt:
 - Das gebaute `skintokens`-Programm ist GPL-3.0, weil sein Teil zum Einlesen der Form aus Michelangelo stammt. 3d-o-mat ruft es nur als eigenes Programm auf und bleibt MIT.
 - Die erzeugten Skelette und Gewichte sind Ausgaben des Modells und kein GPL-Code.
 - Für die Druckdatei nutzt die Website manifold3d (Apache-2.0) und scikit-image (BSD-3-Clause).
+- Die Bewegungsbibliothek bringt keine Daten ins Repo; sie wird beim Bau geholt. CMU: frei, auch kommerziell, nicht weiterverkaufen (mocap.cs.cmu.edu, gefördert von NSF EIA-0196217). Bandai Namco Research Motiondataset: CC BY-NC 4.0.
 
 Gemessen auf oi-o-mat (M6, 32 GB) mit einer TRELLIS-Figur (226.000 Punkte): 34,5 s, höchstens 8,3 GB.
 
@@ -129,9 +135,12 @@ Beim ersten Start meldet sich die App bei der Schranke an. In `http://192.168.2.
 ```sh
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-rembg.txt
 (cd frontend && npm ci && npm run build)
+.venv/bin/python -m omat3d.motions fetch motions-data   # Bewegungsbibliothek, etwa 50 MB, einmal
 cp config.example.json config.json
 .venv/bin/python -m omat3d
 ```
+
+Im Container holt der Bau des Images die Bewegungsbibliothek (`/app/motions-data`); sie ist kein Nutzerinhalt und liegt deshalb nicht auf der T7. Neu geholt wird sie nur, wenn sich `omat3d/motions.py` ändert.
 
 `config.example.json` nimmt `"store": {"folder": "/Volumes/T7/3d-o-mat"}`. Ohne `ssh` ruft die Website `store/launch.py` selbst auf, mit demselben Kennzeichen `.3d-o-mat`.
 
@@ -146,6 +155,7 @@ cp config.example.json config.json
 | `defaults` | Vorgaben für `/v1/3d/generations`: `texture_size`, `decimation_target`, auch `resolution`, `steps` |
 | `cutout` | `auto`, `rembg`, `flood` oder `none` |
 | `onkelBummel` | Nachricht an [Onkel Bummel](https://github.com/Marcel-B/onkel-bummel), wenn ein 3D-Modell oder Skelett fertig ist oder fehlschlägt, mit dem freigestellten Bild: `{"url": "https://onkel-bummel.<tailnet>.ts.net", "token": "ob_…", "topic": "3d-o-mat", "click": "http://3d-o-mat:8090/"}`. Den Token (Publish-Token für das Topic) legst du in Onkel Bummel unter Verwaltung → Publish-Tokens an; statt `token` geht `tokenFile`. Ohne `url` kommt keine Nachricht. Gemalte Bilder meldet img-o-mat selbst |
+| `motionsDir` | wo die Bewegungsbibliothek liegt; Vorgabe `motions-data` neben `omat3d`, im Image `/app/motions-data` |
 | `rembgModel` | Vorgabe `isnet-general-use`: auf einem 12-MP-Foto 9 s und 1,5 GB RAM. `birefnet-general` stellt etwas feiner frei, braucht aber 115 s und 9,5 GB, mehr als der Container hat |
 
 ## Entwickeln
@@ -156,7 +166,7 @@ cp config.example.json config.json
 cd frontend && npm run dev
 ```
 
-`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, Haltung von Gemma, Druckdatei, unzulässige Pfade. `tests/test_printout.py` backt die Haltung eines kleinen GLB mit zwei Knochen ein und prüft auf beiden Wegen, dass die Druckdatei wasserdicht ist. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
+`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, Haltung von Gemma, Druckdatei, unzulässige Pfade. `tests/test_motions.py` prüft das Holen und Umrechnen der Bibliothek (mit nachgestellten Downloads) und ihre Schnittstelle. `tests/test_printout.py` backt die Haltung eines kleinen GLB mit zwei Knochen ein und prüft auf beiden Wegen, dass die Druckdatei wasserdicht ist. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
 
 ## Später
 
