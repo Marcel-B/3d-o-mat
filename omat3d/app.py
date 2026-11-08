@@ -21,6 +21,7 @@ from .motions import Library
 from .notify import Notifier
 from .paint import SIZES, Paintings
 from .printout import PrintError, make_print
+from .skeleton import SkeletonError, move_joints
 from .store import NotMounted, Store, StoreError, new_id
 
 MAX_UPLOAD = 40 * 1024 * 1024
@@ -61,6 +62,11 @@ class PaintRequest(BaseModel):
 class AnimatedRequest(BaseModel):
     """Proben oder Aufnahmen der Bibliothek als Keyframes, wie stage.ts bake() und bakeMotions() sie ausrechnen."""
     clips: list[dict] = Field(..., min_length=1, max_length=12)
+
+
+class SkeletonRequest(BaseModel):
+    """Gelenke verschieben: Index des Knotens -> neue Lage im Raum seines Elternteils (die translation des Knotens)."""
+    moves: dict[str, list[float]] = Field(..., min_length=1, max_length=200)
 
 
 class PrintRequest(BaseModel):
@@ -350,6 +356,42 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
         return Response(data, media_type="model/gltf-binary",
                         headers={"content-disposition": f'attachment; filename="{name}-animiert-{job_id}.glb"'})
+
+    @app.post("/api/jobs/{job_id}/skeleton")
+    def move_skeleton(job_id: str, request: SkeletonRequest):
+        """Verschiebt Gelenke des Skeletts im GLB des Auftrags. Das erste Mal bleibt das Original als
+        skeleton-original.glb daneben liegen, damit „Zurücksetzen“ es wiederherstellen kann."""
+        doc = job(job_id)
+        if doc.get("kind") != "rig" or doc["state"] != "done":
+            raise HTTPException(409, "Nur ein fertiges Modell mit Skelett hat Gelenke")
+        try:
+            moves = {int(k): v for k, v in request.moves.items()}
+        except ValueError:
+            raise HTTPException(422, "Knoten müssen Zahlen sein") from None
+        glb = model_glb(doc)
+        try:
+            changed, count = move_joints(glb, moves)
+        except SkeletonError as error:
+            raise HTTPException(422, str(error)) from error
+        if count:
+            if not doc.get("skeletonEdited"):
+                store.put("jobs", job_id, "skeleton-original.glb", glb)
+            store.put("jobs", job_id, "model.glb", changed)
+            doc = jobs.update(job_id, skeletonEdited=(doc.get("skeletonEdited") or 0) + count)
+        return {"moved": count, "skeletonEdited": doc.get("skeletonEdited") or 0}
+
+    @app.post("/api/jobs/{job_id}/skeleton/reset")
+    def reset_skeleton(job_id: str):
+        doc = job(job_id)
+        if not doc.get("skeletonEdited"):
+            return {"skeletonEdited": 0}
+        try:
+            original = store.get("jobs", job_id, "skeleton-original.glb")
+        except FileNotFoundError:
+            raise HTTPException(404, "Das Original fehlt auf der T7") from None
+        store.put("jobs", job_id, "model.glb", original)
+        jobs.update(job_id, skeletonEdited=0)
+        return {"skeletonEdited": 0}
 
     # Die Druckdatei rechnet auf der CPU und braucht einige hundert MB; zwei auf einmal wären zu viel für den Container.
     printing = threading.Lock()

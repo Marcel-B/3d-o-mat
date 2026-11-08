@@ -4,6 +4,7 @@
 // gehen von der Grundhaltung der Figur aus (T- oder A-Pose), die beim Laden gemessen wird.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { Retarget, type Motion, type MotionOptions } from './retarget';
 
@@ -115,6 +116,13 @@ export class RigStage {
   private frame = 0;
   private resizer: ResizeObserver;
   private grid: THREE.GridHelper;
+  // Der Gelenk-Editor: ein Marker je Knochen zum Anklicken, ein Griff zum Verschieben, und welche Knochen seit dem
+  // Laden woanders stehen (original: ihre Lage davor, lokal zum Elternteil).
+  private joints: {
+    markers: THREE.Mesh[]; control: TransformControls; selected: THREE.Bone | null;
+    original: Map<THREE.Bone, THREE.Vector3>; moved: Set<THREE.Bone>; radius: number;
+  } | null = null;
+  onJointsChanged: (() => void) | null = null;
   bones: THREE.Bone[] = [];
   amplitude = 1;
 
@@ -143,6 +151,7 @@ export class RigStage {
         this.fists(this.motionFist);
         this.follow();
       }
+      if (this.joints) this.placeMarkers();
       this.controls.update();
       this.renderer.render(this.scene, this.camera);
       this.frame = requestAnimationFrame(loop);
@@ -158,6 +167,7 @@ export class RigStage {
   }
 
   dispose() {
+    this.editJoints(false);
     cancelAnimationFrame(this.frame);
     this.resizer.disconnect();
     this.controls.dispose();
@@ -704,6 +714,176 @@ export class RigStage {
   showSkeleton(on: boolean) {
     if (this.helper) this.helper.visible = on;
   }
+
+  // --- Gelenk-Editor
+
+  // Gelenke verschieben an oder aus. Die Figur steht dabei in ihrer Grundhaltung; ein Klick auf einen Marker wählt
+  // den Knochen, der Griff verschiebt ihn im Raum. Verschieben ändert die Grundhaltung: das Netz bleibt, wie es ist,
+  // und die Bindematrizen folgen (calculateInverses), sodass die Figur sich später um die neue Stelle beugt.
+  editJoints(on: boolean) {
+    if (!!this.joints === on) return;
+    if (!on) {
+      const joints = this.joints!;
+      this.joints = null;
+      joints.control.detach();
+      this.scene.remove(joints.control.getHelper());
+      joints.control.dispose();
+      joints.markers.forEach(marker => { this.scene.remove(marker); marker.geometry.dispose(); });
+      this.canvas.removeEventListener('pointerdown', this.pickDown);
+      this.canvas.removeEventListener('pointerup', this.pickUp);
+      this.controls.enabled = true;
+      return;
+    }
+    if (!this.root) return;
+    this.clip = null;
+    if (this.motion) { this.motion = null; this.recenter(); }
+    this.base.clear();
+    this.resetPose();
+    this.root.updateMatrixWorld(true);
+    const height = new THREE.Box3().setFromObject(this.root).getSize(new THREE.Vector3()).y || 1.8;
+    const radius = height * 0.011;
+    const geometry = new THREE.SphereGeometry(radius, 12, 8);
+    const markers = this.bones.map(bone => {
+      const marker = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: this.boneColor, depthTest: false, transparent: true, opacity: 0.85 }));
+      marker.renderOrder = 10;
+      marker.userData.bone = bone;
+      this.scene.add(marker);
+      return marker;
+    });
+    const control = new TransformControls(this.camera, this.canvas);
+    control.setMode('translate');
+    control.setSpace('world');
+    control.setSize(0.6);
+    control.addEventListener('dragging-changed', event => { this.controls.enabled = !(event as unknown as { value: boolean }).value; });
+    control.addEventListener('objectChange', () => this.jointDragged());
+    this.scene.add(control.getHelper());
+    this.joints = { markers, control, selected: null, original: new Map(), moved: new Set(), radius };
+    this.canvas.addEventListener('pointerdown', this.pickDown);
+    this.canvas.addEventListener('pointerup', this.pickUp);
+    this.placeMarkers();
+  }
+
+  get editingJoints() {
+    return !!this.joints;
+  }
+
+  get selectedJoint() {
+    return this.joints?.selected ? this.bones.indexOf(this.joints.selected) : -1;
+  }
+
+  get movedJoints() {
+    return this.joints?.moved.size ?? 0;
+  }
+
+  selectJoint(index: number) {
+    const joints = this.joints;
+    const bone = this.bones[index];
+    if (!joints) return;
+    joints.selected = bone ?? null;
+    if (bone) joints.control.attach(bone); else joints.control.detach();
+    this.placeMarkers();
+    this.onJointsChanged?.();
+  }
+
+  // Den gewählten Knochen auf die andere Seite spiegeln: sein Gegenstück (Left ↔ Right) bekommt die gespiegelte Lage,
+  // an der Ebene durch die Hüfte, quer zur Linie der beiden Oberschenkel.
+  mirrorJoint() {
+    const joints = this.joints;
+    const bone = joints?.selected;
+    if (!joints || !bone) return false;
+    const plain = bone.name.replace(/^mixamorig[:_]?/i, '');
+    const otherName = plain.startsWith('Left') ? plain.replace(/^Left/, 'Right') : plain.startsWith('Right') ? plain.replace(/^Right/, 'Left') : null;
+    const other = otherName ? this.find(otherName) : undefined;
+    const hips = this.find('Hips'), left = this.find('LeftUpLeg'), right = this.find('RightUpLeg');
+    if (!other || !other.parent || !hips || !left || !right) return false;
+    this.root!.updateMatrixWorld(true);
+    const at = (b: THREE.Object3D) => b.getWorldPosition(new THREE.Vector3());
+    const normal = at(left).sub(at(right)).setY(0).normalize();
+    const centre = at(hips);
+    const p = at(bone).sub(centre);
+    const mirrored = p.sub(normal.clone().multiplyScalar(2 * p.dot(normal))).add(centre);
+    other.parent.updateWorldMatrix(true, false);
+    this.moveJoint(other, other.parent.worldToLocal(mirrored));
+    return true;
+  }
+
+  // Alle verschobenen Knochen zurück an ihre Lage beim Laden.
+  resetJoints() {
+    const joints = this.joints;
+    if (!joints) return;
+    for (const [bone, position] of joints.original) this.moveJoint(bone, position, true);
+    joints.original.clear();
+    joints.moved.clear();
+    this.onJointsChanged?.();
+  }
+
+  // Die neue Lage jedes verschobenen Knochens, Knoten im GLB -> translation, für den Server.
+  jointMoves(): Record<string, [number, number, number]> {
+    const out: Record<string, [number, number, number]> = {};
+    for (const bone of this.joints?.moved ?? []) {
+      const node = this.nodes.get(bone);
+      if (node !== undefined) out[String(node)] = bone.position.toArray() as [number, number, number];
+    }
+    return out;
+  }
+
+  private moveJoint(bone: THREE.Bone, local: THREE.Vector3, restoring = false) {
+    const joints = this.joints!;
+    if (!restoring) {
+      if (!joints.original.has(bone)) joints.original.set(bone, this.restPosition.get(bone)!.clone());
+      joints.moved.add(bone);
+    }
+    bone.position.copy(local);
+    this.restPosition.set(bone, local.clone());
+    this.rebind();
+    if (!restoring) this.onJointsChanged?.();
+  }
+
+  private jointDragged() {
+    const joints = this.joints;
+    const bone = joints?.selected;
+    if (!joints || !bone) return;
+    this.moveJoint(bone, bone.position.clone());
+  }
+
+  // Die Bindematrizen neu aus der Grundhaltung, in der die Knochen gerade stehen: so bleibt das Netz an Ort und Stelle.
+  // Die Matrizen aus dem GLB gelten im Raum der Datei, die Knochen stehen aber schon eingepasst auf der Bühne
+  // (root skaliert und verschoben); das Einpassen wird deshalb herausgerechnet, wie es der Server auch nicht kennt.
+  private rebind() {
+    this.root!.updateMatrixWorld(true);
+    const fit = this.root!.matrixWorld;
+    this.meshes.forEach(mesh => mesh.skeleton.bones.forEach((bone, i) => {
+      mesh.skeleton.boneInverses[i].copy(bone.matrixWorld).invert().multiply(fit);
+    }));
+    this.floor = this.lowestBone();
+  }
+
+  private placeMarkers() {
+    const joints = this.joints;
+    if (!joints) return;
+    const selected = new THREE.Color(0xf59e0b), moved = new THREE.Color(0xdc2626), plain = new THREE.Color(this.boneColor);
+    joints.markers.forEach(marker => {
+      const bone = marker.userData.bone as THREE.Bone;
+      bone.getWorldPosition(marker.position);
+      (marker.material as THREE.MeshBasicMaterial).color.copy(bone === joints.selected ? selected : joints.moved.has(bone) ? moved : plain);
+      marker.scale.setScalar(bone === joints.selected ? 1.5 : 1);
+    });
+  }
+
+  private pressed: { x: number; y: number } | null = null;
+  private pickDown = (event: PointerEvent) => { this.pressed = { x: event.clientX, y: event.clientY }; };
+  private pickUp = (event: PointerEvent) => {
+    const joints = this.joints, pressed = this.pressed;
+    this.pressed = null;
+    // Nur ein Klick wählt; eine Bewegung war Drehen der Kamera oder Ziehen am Griff.
+    if (!joints || !pressed || Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) > 4 || joints.control.dragging) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const point = new THREE.Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(point, this.camera);
+    const hit = ray.intersectObjects(joints.markers, false)[0];
+    if (hit) this.selectJoint(this.bones.indexOf(hit.object.userData.bone as THREE.Bone));
+  };
 
   wireframe(on: boolean) {
     this.meshes.forEach(mesh => ([] as THREE.Material[]).concat(mesh.material).forEach(material => {
