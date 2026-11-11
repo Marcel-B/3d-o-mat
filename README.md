@@ -62,7 +62,7 @@ Ist die T7 nicht da (keine Datei `.3d-o-mat` im Ordner) oder oi-o-mat nicht erre
 
 Andere Programme lassen 3d-o-mat aus einem Bild ein GLB machen, erster Nutzer ist Kaderwerk (ein texturierter Kopf je Spieler). Die Schnittstelle ist wie die von img-o-mat gebaut: Pfade unter `/v1`, JSON rein und raus, `Authorization: Bearer <App>` nennt nur den Absender (keine Anmeldung), Fehler kommen als `{"error": {"message": "…"}}` mit passendem HTTP-Code. Sie gehört nur ins Heimnetz und ins Tailnet.
 
-Kaderwerk erreicht sie unter derselben Adresse wie die Seite: **`https://3d.idsrv.info`** (im Heimnetz auch direkt `http://3d-o-mat:8090`, Port 8090 des Containers; die IP nennt `bash /root/3d-o-mat-lxc.sh pruefen <CTID>` auf Proxmox). Gerechnet wird wie bei der Seite über die Schranke auf oi-o-mat mit TRELLIS.2 (`trellisModel`, Vorgabe `ddalcu/TRELLIS.2-4B-MLX-Serve-8bit`), in derselben Schlange wie die Aufträge der Seite: nie zwei zugleich. Auf der Seite stehen diese Aufträge mit dem Absender in der Liste.
+Kaderwerk erreicht sie unter derselben Adresse wie die Seite: **`https://3d.idsrv.info`** (nur intern, über das Tailnet; dahinter Port 8090 des Containers). Gerechnet wird wie bei der Seite über die Schranke auf oi-o-mat mit TRELLIS.2 (`trellisModel`, Vorgabe `ddalcu/TRELLIS.2-4B-MLX-Serve-8bit`), in derselben Schlange wie die Aufträge der Seite: nie zwei zugleich. Auf der Seite stehen diese Aufträge mit dem Absender in der Liste.
 
 | Endpunkt | Was |
 | --- | --- |
