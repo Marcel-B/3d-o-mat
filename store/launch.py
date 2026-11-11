@@ -6,8 +6,9 @@
     launch.py list <kind> <name>        every <root>/<kind>/*/<name> (a JSON file) as one JSON list
     launch.py delete <kind> <id>        <root>/<kind>/<id> with everything in it
 
-kind is "images" or "jobs", id looks like 20261029-001500-ab12, name like cutout.png: nothing else can be named, so
-the key reaches nothing outside the folder. Over SSH the website's key may run only this script (install-store.sh
+kind is "images" or "jobs", id looks like 20261029-001500-ab12, name like cutout.png; or kind "files" (uploads and
+results of the /v1 interface), id the file's SHA-256. Nothing else can be named, so the key reaches nothing outside
+the folder. Over SSH the website's key may run only this script (install-store.sh
 writes restrict,command="/usr/bin/python3 <root>/store/launch.py --ssh" into ~/.ssh/authorized_keys): sshd runs it
 whatever was asked and leaves that in SSH_ORIGINAL_COMMAND, of which the words after the first count.
 
@@ -29,8 +30,9 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS = os.path.join(os.environ.get("OMAT3D_STORE_ROOT") or os.path.dirname(HERE), "store.json")
 MARKER = ".3d-o-mat"
-KINDS = ("images", "jobs")
+KINDS = ("images", "jobs", "files")
 ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
@@ -55,7 +57,8 @@ def mounted(folder: str) -> bool:
 
 
 def place(folder: str, kind: str, item: str, name: str | None = None) -> str:
-    if kind not in KINDS or not ID.match(item) or (name is not None and (not NAME.match(name) or ".." in name)):
+    valid = SHA256 if kind == "files" else ID
+    if kind not in KINDS or not valid.match(item) or (name is not None and (not NAME.match(name) or ".." in name)):
         raise Refused(f"unzulässig: {kind} {item} {name or ''}".strip())
     if not mounted(folder):
         raise Refused(f"T7 nicht verbunden: {os.path.join(folder, MARKER)} fehlt")

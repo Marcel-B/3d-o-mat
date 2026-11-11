@@ -31,13 +31,16 @@ export type Options = {
 
 export type Job = {
   id: string;
-  kind?: 'rig';
+  kind?: 'rig' | 'api';
+  // Aufträge der Schnittstelle (/v1): wer bestellt hat und unter welchem Namen.
+  api?: { app: string | null; creator: string | null; label: string | null };
   sourceJobId?: string;
   report?: { joints_raw?: number; naming?: string; weights?: { verts?: number } } | null;
   // Wie viele Gelenke des Skeletts von Hand verschoben wurden (0 oder fehlt: das Skelett von SkinTokens).
   skeletonEdited?: number;
   fingers?: Record<string, number>;
-  imageId: string;
+  // Bei Aufträgen der Schnittstelle erst gesetzt, wenn das Bild freigestellt ist.
+  imageId: string | null;
   imageName: string | null;
   options: Options;
   state: 'queued' | 'waiting' | 'running' | 'done' | 'failed' | 'canceled';

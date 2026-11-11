@@ -58,6 +58,71 @@ Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schran
 
 Ist die T7 nicht da (keine Datei `.3d-o-mat` im Ordner) oder oi-o-mat nicht erreichbar, nimmt die Website nichts an und zeigt „T7 nicht erreichbar“. So landet nie etwas auf der internen Platte von oi-o-mat.
 
+## Schnittstelle für andere Programme (`/v1`)
+
+Andere Programme lassen 3d-o-mat aus einem Bild ein GLB machen, erster Nutzer ist Kaderwerk (ein texturierter Kopf je Spieler). Die Schnittstelle ist wie die von img-o-mat gebaut: Pfade unter `/v1`, JSON rein und raus, `Authorization: Bearer <App>` nennt nur den Absender (keine Anmeldung), Fehler kommen als `{"error": {"message": "…"}}` mit passendem HTTP-Code. Sie gehört nur ins Heimnetz und ins Tailnet.
+
+Kaderwerk erreicht sie unter derselben Adresse wie die Seite: **`https://3d.idsrv.info`** (nur intern, über das Tailnet), im Heimnetz auch direkt `http://192.168.2.75:8090`. Gerechnet wird wie bei der Seite über die Schranke auf oi-o-mat mit TRELLIS.2 (`trellisModel`, Vorgabe `ddalcu/TRELLIS.2-4B-MLX-Serve-8bit`), in derselben Schlange wie die Aufträge der Seite: nie zwei zugleich. Auf der Seite stehen diese Aufträge mit dem Absender in der Liste.
+
+| Endpunkt | Was |
+| --- | --- |
+| `POST /v1/files` | Bild als rohe Bytes (PNG, JPEG, WebP, bis 40 MB) → `{"sha256": "…"}`, 201 neu, 200 schon da |
+| `GET /v1/files/<sha256>` | die Datei: Bilder mit ihrem Typ, GLB als `model/gltf-binary` |
+| `POST /v1/models3d/generations` | Auftrag anlegen, kehrt sofort zurück: 202 `{"id": "job_…", "status": "queued", "position": 3, "seed": 1234}` |
+| `GET /v1/models3d/generations/<id>` | `status` (`queued`, `running`, `done`, `failed`, nach DELETE `canceled`), `position` (0, sobald er rechnet), `progress` (0 bis 1 in Stufen: Freistellen, Form, Textur, Export), `seed`, `error`, bei `done` `result`: `{"file": "<sha256 der GLB>", "bytes", "faces", "vertices", "texture"}` |
+| `DELETE /v1/models3d/generations/<id>` | nimmt einen wartenden Auftrag heraus; ein laufender rechnet zu Ende (409) |
+| `GET /v1/models3d/generations` | `{"data": [...]}`, die letzten 100 Aufträge der Schnittstelle, neueste zuerst |
+| `GET /v1/busy` | `{"busy": true\|false, "running": "job_…"\|null, "waiting": 2}`; busy, solange ein Auftrag rechnet oder wartet |
+
+Felder des Auftrags (nur `image` ist Pflicht; unbekannte Felder werden abgewiesen):
+
+| Feld | Vorgabe | Bedeutung |
+| --- | --- | --- |
+| `image` | | SHA-256 aus `POST /v1/files` |
+| `faces` | 30000 | Ziel-Flächenzahl nach dem Vereinfachen, 2000 bis 500000 (geht als `decimation_target` an TRELLIS.2) |
+| `texture` | 2048 | Kantenlänge der Texturen: 512, 1024, 2048 oder 4096 |
+| `remove_background` | true | vorher freistellen wie beim Hochladen auf der Seite (rembg); mit false geht das Bild, wie es ist (hat es Transparenz, zählt die) |
+| `seed` | gewürfelt | 0 bis 2147483647; der benutzte steht in der Antwort |
+| `height` | 0.25 | Höhe des Modells in Metern (0,05 bis 3) |
+| `creator`, `label` | Absender, leer | nur zur Anzeige, `label` wird auf der Seite der Name |
+
+Das GLB:
+- glTF 2.0 binär, genau ein Mesh mit einer Primitive (POSITION, NORMAL, TEXCOORD_0, Indizes), kein Skelett, keine Animation.
+- PBR mit Basisfarbe-Textur und Metallic-Roughness-Textur, beide PNG in der Kantenlänge `texture`.
+- Y oben, das Gesicht nach +Z, Maße in Metern (auf `height` skaliert). Der Ursprung liegt mittig unten am Hals: in der Mitte des untersten Querschnitts, nicht der ganzen Hülle, damit eine Nase ihn nicht nach vorn schiebt.
+- In `asset.extras`: `model`, `seed`, `faces`, `texture`, `image` (SHA-256 des Eingabebilds), dazu `creator`, `label`, `height`.
+- Der UV-Atlas ist der von TRELLIS.2. Gegen Farbe, die an den Nähten ausläuft, bekommt jedes Texel außerhalb der Inseln die Farbe des nächsten Texels innerhalb, also mehr als 4 Pixel Rand. Den Atlas selbst packt 3d-o-mat nicht neu; TRELLIS.2 zerlegt ihn in viele kleine Inseln, eine große zusammenhängende fürs Gesicht gibt es so noch nicht (siehe „Später“).
+
+Nach einem Neustart laufen wartende Aufträge weiter; einer, der gerade rechnete, steht als `failed` mit dem Grund „durch einen Neustart von 3d-o-mat abgebrochen“. Bilder und GLBs liegen auf der T7 unter `files/<sha256>/`. Dafür muss `store/launch.py` auf oi-o-mat auf dem Stand sein: nach dem Update einmal `./install-store.sh --key "…"` im Checkout auf oi-o-mat. Ein alter Stand antwortet mit 502 und genau diesem Hinweis.
+
+Der ganze Ablauf mit `curl`:
+
+```sh
+URL=https://3d.idsrv.info
+AUTH="Authorization: Bearer kaderwerk"
+
+# 1. Bild hochladen
+SHA=$(curl -sS -X POST "$URL/v1/files" -H "$AUTH" -H 'content-type: application/octet-stream' \
+  --data-binary @kopf.png | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha256"])')
+
+# 2. Auftrag anlegen
+JOB=$(curl -sS -X POST "$URL/v1/models3d/generations" -H "$AUTH" -H 'content-type: application/json' \
+  -d "{\"image\": \"$SHA\", \"faces\": 30000, \"texture\": 2048, \"seed\": 1234, \"creator\": \"kaderwerk\", \"label\": \"HOCHOFEN 9 / KLEIN\"}" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+
+# 3. Stand abfragen, bis done oder failed
+while :; do
+  STATE=$(curl -sS "$URL/v1/models3d/generations/$JOB" -H "$AUTH")
+  echo "$STATE"
+  case "$STATE" in *'"status":"done"'*|*'"status":"failed"'*|*'"status":"canceled"'*) break;; esac
+  sleep 10
+done
+
+# 4. GLB holen
+GLB=$(echo "$STATE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["file"])')
+curl -sS -o kopf.glb "$URL/v1/files/$GLB" -H "$AUTH"
+```
+
 ## Einrichten
 
 ### 1. Proxmox: Container und Website
@@ -171,8 +236,9 @@ Im Container holt der Bau des Images die Bewegungsbibliothek (`/app/motions-data
 cd frontend && npm run dev
 ```
 
-`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, Haltung von Gemma, Druckdatei, unzulässige Pfade. `tests/test_motions.py` prüft das Holen und Umrechnen der Bibliothek (mit nachgestellten Downloads) und ihre Schnittstelle. `tests/test_printout.py` backt die Haltung eines kleinen GLB mit zwei Knochen ein und prüft auf beiden Wegen, dass die Druckdatei wasserdicht ist. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
+`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, Haltung von Gemma, Druckdatei, unzulässige Pfade. `tests/test_models3d.py` spielt die Schnittstelle unter `/v1` mit einem nachgestellten TRELLIS.2 durch: hochladen, Auftrag, Stand, GLB holen und prüfen (ein Mesh, Ursprung am Hals, Texturen, `extras`), Fehler bei falschem SHA-256 und unzulässigen Werten, Abbrechen und Neustart. `tests/test_motions.py` prüft das Holen und Umrechnen der Bibliothek (mit nachgestellten Downloads) und ihre Schnittstelle. `tests/test_printout.py` backt die Haltung eines kleinen GLB mit zwei Knochen ein und prüft auf beiden Wegen, dass die Druckdatei wasserdicht ist. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
 
 ## Später
 
+- Schnittstelle: den UV-Atlas neu packen (etwa mit xatlas) und die Texturen darauf umbacken, damit das Gesicht eine große zusammenhängende Insel bekommt.
 - Pixal3D für mehrere Ansichten desselben Objekts (MLX-Serve kann es, `images` statt `image`).
