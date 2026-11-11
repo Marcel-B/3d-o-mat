@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +19,7 @@ from .animate import AnimationError, add_animations
 from .config import Config
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
 from .jobs import OPEN, Jobs
+from .models3d import ApiError, Models3d, error as api_error
 from .motions import Library
 from .notify import Notifier
 from .paint import SIZES, Paintings
@@ -98,8 +101,20 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
     store = store or make_store(config, log)
     gate = gate or Gate(config.gate_url, config.app_name, config.request_timeout_minutes)
     notifier = Notifier(config.onkel_bummel, store, log)
+
+    def save_image(data: bytes, name: str, extra: dict, method: str | None = None) -> dict:
+        """Freistellen und mit dem Original auf die T7, für hochgeladene, gemalte und die Bilder der Schnittstelle."""
+        png, info = cutout.cut(data, method or config.cutout, config.rembg_model)
+        image_id = new_id()
+        store.put("images", image_id, extra["original"], data)
+        store.put("images", image_id, "cutout.png", png)
+        doc = {"id": image_id, "name": name, "cutout": info, "check": None, "created": image_id, **extra}
+        return store.write("images", doc)
+
+    models3d = Models3d(config, store, save_image, log)
     jobs = Jobs(store, gate, config.trellis_model, config.defaults, log, rig_model=config.rig_model,
-                on_finish=notifier.job_finished)
+                on_finish=notifier.job_finished, api=models3d)
+    models3d.jobs = jobs
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -115,17 +130,40 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
 
     app = FastAPI(title="3d-o-mat", lifespan=lifespan)
     app.state.jobs = jobs
+    app.state.models3d = models3d
     app.state.notifier = notifier
     app.state.store = store
     library = Library(config.motions_dir)
 
+    def answer(request: Request, status: int, message: str) -> JSONResponse:
+        # Unter /v1 wie img-o-mat ({"error": {"message"}}), die Seite unter /api liest {"error": "…"}.
+        if request.url.path.startswith("/v1/"):
+            return api_error(status, message)
+        return JSONResponse({"error": message}, status_code=status)
+
     @app.exception_handler(NotMounted)
-    async def not_mounted(_request: Request, error: NotMounted):
-        return JSONResponse({"error": str(error)}, status_code=503)
+    async def not_mounted(request: Request, error: NotMounted):
+        return answer(request, 503, str(error))
 
     @app.exception_handler(StoreError)
-    async def store_error(_request: Request, error: StoreError):
-        return JSONResponse({"error": f"Ablage auf oi-o-mat: {error}"}, status_code=502)
+    async def store_error(request: Request, error: StoreError):
+        return answer(request, 502, f"Ablage auf oi-o-mat: {error}")
+
+    @app.exception_handler(ApiError)
+    async def refused_request(_request: Request, error: ApiError):
+        return api_error(error.status, error.message)
+
+    @app.exception_handler(HTTPException)
+    async def http_error(request: Request, error: HTTPException):
+        if request.url.path.startswith("/v1/"):
+            return api_error(error.status_code, str(error.detail))
+        return await http_exception_handler(request, error)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid(request: Request, error: RequestValidationError):
+        if request.url.path.startswith("/v1/"):
+            return api_error(400, "; ".join(str(entry.get("msg")) for entry in error.errors()) or "Ungültige Anfrage")
+        return await request_validation_exception_handler(request, error)
 
     @app.exception_handler(GateRefused)
     async def refused(_request: Request, error: GateRefused):
@@ -189,15 +227,6 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         }
 
     # --- Bilder
-
-    def save_image(data: bytes, name: str, extra: dict) -> dict:
-        """Freistellen und mit dem Original auf die T7, für hochgeladene und gemalte Bilder."""
-        png, info = cutout.cut(data, config.cutout, config.rembg_model)
-        image_id = new_id()
-        store.put("images", image_id, extra["original"], data)
-        store.put("images", image_id, "cutout.png", png)
-        doc = {"id": image_id, "name": name, "cutout": info, "check": None, "created": image_id, **extra}
-        return store.write("images", doc)
 
     paintings = Paintings(gate, save_image, log)
     app.state.paintings = paintings
@@ -436,6 +465,9 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
             return assist.pose_from_text(gate, config.assist_model, request.text, request.lang)
         except ValueError as error:
             raise HTTPException(502, str(error)) from error
+
+    # --- Schnittstelle für andere Programme (Kaderwerk): /v1, siehe models3d.py
+    models3d.add_routes(app)
 
     if FRONTEND.is_dir():
         app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")

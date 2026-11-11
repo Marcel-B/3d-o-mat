@@ -1,5 +1,7 @@
-"""Die Aufträge: Bild zu 3D und Skelett einsetzen (kind "rig", aus dem GLB eines fertigen 3D-Auftrags), einer nach dem anderen (TRELLIS.2 braucht oi-o-mat ohnehin ganz). Jeder Auftrag liegt als
-job.json auf der T7 (über store.py); nach einem Neustart der App werden unterbrochene Aufträge neu eingereiht.
+"""Die Aufträge: Bild zu 3D, Skelett einsetzen (kind "rig", aus dem GLB eines fertigen 3D-Auftrags) und Aufträge der
+Schnittstelle unter /v1 (kind "api", models3d.py), alle in einer Schlange, einer nach dem anderen (TRELLIS.2 braucht
+oi-o-mat ohnehin ganz). Jeder Auftrag liegt als job.json auf der T7 (über store.py); nach einem Neustart der App werden
+unterbrochene Aufträge der Seite neu eingereiht, die der Schnittstelle stehen als fehlgeschlagen da.
 """
 import threading
 import time
@@ -19,10 +21,17 @@ def now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def order(job: dict) -> tuple:
+    """Reihenfolge der Schlange: created hat nur Sekunden, queuedAt trennt Aufträge aus derselben Sekunde."""
+    return job["created"], job.get("queuedAt") or 0.0, job["id"]
+
+
 class Jobs:
     def __init__(self, store: Store, gate: Gate, model: str, defaults: dict, log=print, rig_model: str = "skintokens",
-                 on_finish=None):
+                 on_finish=None, api=None):
         self.store = store
+        # Freistellen und GLB fertig machen für Aufträge der Schnittstelle (models3d.Models3d), sonst None.
+        self.api = api
         # Bekommt jeden Auftrag, der fertig oder fehlgeschlagen ist (Onkel Bummel); muss sofort zurückkehren.
         self.on_finish = on_finish
         self.gate = gate
@@ -61,7 +70,7 @@ class Jobs:
         job = {
             "id": job_id, "imageId": image["id"], "imageName": image.get("name"), "options": options,
             "state": "queued", "stage": None, "step": None, "total": None, "message": None,
-            "created": now(), "started": None, "finished": None, "seconds": None, "glbBytes": None, "attempts": 0,
+            "created": now(), "queuedAt": time.time(), "started": None, "finished": None, "seconds": None, "glbBytes": None, "attempts": 0,
         }
         self.save(job)
         self.wake.set()
@@ -75,7 +84,20 @@ class Jobs:
             "id": job_id, "kind": "rig", "sourceJobId": source["id"], "imageId": source["imageId"],
             "imageName": source.get("imageName"), "options": {"class": kind, "seed": seed},
             "state": "queued", "stage": None, "step": None, "total": None, "message": None, "report": None,
-            "created": now(), "started": None, "finished": None, "seconds": None, "glbBytes": None, "attempts": 0,
+            "created": now(), "queuedAt": time.time(), "started": None, "finished": None, "seconds": None, "glbBytes": None, "attempts": 0,
+        }
+        self.save(job)
+        self.wake.set()
+        return job
+
+    def create_api(self, fields: dict) -> dict:
+        """Ein Auftrag der Schnittstelle: fields sind file, options und api (Absender, Beschriftung, Höhe)."""
+        self.store.ensure_mounted()
+        job_id = new_id()
+        job = {
+            "id": job_id, "kind": "api", "imageId": None, "imageName": fields["api"].get("label"), **fields,
+            "state": "queued", "stage": None, "step": None, "total": None, "message": None, "result": None,
+            "created": now(), "queuedAt": time.time(), "started": None, "finished": None, "seconds": None, "glbBytes": None, "attempts": 0,
         }
         self.save(job)
         self.wake.set()
@@ -88,9 +110,14 @@ class Jobs:
         return self.update(job_id, state="canceled", finished=now())
 
     def recover(self) -> None:
-        """Nach einem Neustart: was lief oder bei der Schranke wartete, kommt wieder in die Schlange."""
+        """Nach einem Neustart: was lief oder bei der Schranke wartete, kommt wieder in die Schlange. Ein Auftrag der
+        Schnittstelle steht dagegen als fehlgeschlagen da, mit Grund: sein Absender soll wissen, dass er neu bestellen
+        muss, statt dass derselbe Seed womöglich ein zweites Mal Minuten rechnet."""
         for job in self.all():
-            if job["state"] in ("waiting", "running"):
+            if job["state"] in ("waiting", "running") and job.get("kind") == "api":
+                self.update(job["id"], state="failed", stage=None, finished=now(),
+                            message="durch einen Neustart von 3d-o-mat abgebrochen")
+            elif job["state"] in ("waiting", "running"):
                 self.update(job["id"], state="queued", stage=None, step=None, total=None,
                             message="nach einem Neustart neu eingereiht")
 
@@ -104,7 +131,7 @@ class Jobs:
 
     def next_job(self):
         queued = [job for job in self.all() if job["state"] == "queued"]
-        return min(queued, key=lambda job: job["created"]) if queued else None
+        return min(queued, key=order) if queued else None
 
     def run(self) -> None:
         while not self.stop.is_set():
@@ -148,7 +175,12 @@ class Jobs:
                     return self.gate.rig(self.rig_model, source, job["options"].get("class", "humanoid"),
                                          job["options"].get("seed", 1))
             else:
-                png = self.store.get("images", job["imageId"], "cutout.png")
+                if job.get("kind") == "api":
+                    self.update(job_id, state="running", stage="cutout", message="stellt frei")
+                    png = self.api.prepare(job_id, job)
+                    self.update(job_id, state="waiting", stage=None, message="geht an oi-o-mat")
+                else:
+                    png = self.store.get("images", job["imageId"], "cutout.png")
                 options = {**self.defaults, **job["options"]}
 
                 def work():
@@ -170,7 +202,10 @@ class Jobs:
                         raise
                     self.update(job_id, state="waiting", message=f"{error}; neuer Versuch in {int(error.retry_after)} s")
                     self.stop.wait(error.retry_after)
-            fingers = None
+            fingers = result = None
+            if job.get("kind") == "api":
+                self.update(job_id, state="running", stage="export", step=None, total=None, message="GLB fertig machen")
+                glb, result = self.api.finish(job, glb)
             if job.get("kind") == "rig":
                 # SkinTokens leaves the finger chains unnamed; named, the fist, Gemma and Godot can use them.
                 glb, fingers = self.name_fingers(job_id, glb)
@@ -179,7 +214,8 @@ class Jobs:
             seconds = round(time.monotonic() - started)
             finished = self.update(job_id, state="done", finished=now(), seconds=seconds, glbBytes=len(glb), message=None,
                                    stage=None, **({"report": report} if report is not None else {}),
-                                   **({"fingers": fingers} if fingers is not None else {}))
+                                   **({"fingers": fingers} if fingers is not None else {}),
+                                   **({"result": result} if result is not None else {}))
             self.log(f"{job_id}: fertig in {seconds} s, {len(glb) // 1024} KB")
         except GateRefused as error:
             hint = " Freigeben oder installieren in der Oberfläche der Schranke (/gate)." if error.status in (403, 424) else ""

@@ -137,6 +137,7 @@ textarea { resize: vertical; }
 .jobs li:first-child { border-top: 0; }
 .jobs li.active { background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .jobs img { width: 44px; height: 44px; object-fit: contain; flex: 0 0 44px; }
+.jobs .thumb-empty { width: 44px; height: 44px; flex: 0 0 44px; }
 .jobs .actions { flex: 0 0 auto; }
 .jobs strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14rem; }
 /* Flex statt Zeilenhöhe: so sitzt der Text unabhängig von der Schrift mittig im Balken. */

@@ -5,6 +5,7 @@ const tones: Record<Job['state'], string> = { queued: 'muted', waiting: 'warn', 
 
 // TRELLIS.2 meldet Stufen wie "trellis-shape-1024"; lesbar: "Form (1024)". Unbekannte bleiben, wie sie sind.
 const stages: [RegExp, keyof Texts['jobs']['stages']][] = [
+  [/^cutout$/, 'cutout'],
   [/sparse|structure/, 'coarse'],
   [/shape|geometry|mesh/, 'shape'],
   [/tex|paint|material|bake/, 'texture'],
@@ -46,11 +47,12 @@ export function JobList({ jobs, selected, onSelect, onChanged }: Props) {
       <ul className="jobs">
         {jobs.map(job => (
           <li key={job.id} className={job.id === selected ? 'active' : ''} onClick={() => onSelect(job.id)}>
-            <img src={cutoutUrl(job.imageId)} alt="" />
+            {job.imageId ? <img src={cutoutUrl(job.imageId)} alt="" /> : <div className="thumb-empty" />}
             <div className="grow">
               <div className="row tight">
-                <strong>{job.imageName ?? job.imageId}</strong>
+                <strong>{job.imageName ?? job.imageId ?? job.id}</strong>
                 {job.kind === 'rig' && <span className="pill muted">{t.skeleton}</span>}
+                {job.kind === 'api' && <span className="pill muted" title={t.viaApi}>{job.api?.creator || 'API'}</span>}
                 <span className={`pill ${tones[job.state]}`}>{t.states[job.state]}</span>
                 <span className="muted small">{duration(job, t)}</span>
               </div>
