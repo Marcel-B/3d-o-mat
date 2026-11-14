@@ -1,6 +1,6 @@
 import '@google/model-viewer';
 import { useState } from 'react';
-import { api, modelUrl, type Job } from '../api';
+import { api, hasSkeleton, modelUrl, type Job } from '../api';
 import { RigViewer } from '../rig/RigViewer';
 import { PrintPanel } from './PrintPanel';
 import { useT } from '../i18n';
@@ -29,9 +29,9 @@ const seconds = (s: number) => (s < 90 ? `${s} s` : `${Math.round(s / 60)} min`)
 type Props = { job: Job | null; jobs: Job[]; scheme: 'light' | 'dark'; onRigStarted: (job: Job) => void };
 
 export function Viewer({ job, jobs, scheme, onRigStarted }: Props) {
-  const { viewer: t } = useT();
+  const { viewer: t, locale } = useT();
   const ready = job?.state === 'done';
-  const rigged = job?.kind === 'rig';
+  const rigged = hasSkeleton(job);
   const [kind, setKind] = useState('humanoid');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,10 +72,12 @@ export function Viewer({ job, jobs, scheme, onRigStarted }: Props) {
           <a className="button primary" href={modelUrl(job.id, true)}>{rigged ? t.downloadRigged : t.download}</a>
           <span className="muted small">
             {job.glbBytes ? size(job.glbBytes) : ''}{job.seconds !== null ? t.computed(seconds(job.seconds)) : ''}
+            {job.import ? t.imported(job.import.format.toUpperCase(), job.import.triangles.toLocaleString(locale)) : ''}
             {rigged ? t.riggedHint : t.plainHint}
           </span>
         </div>
       )}
+      {ready && job.import?.notes.map(note => <div key={note} className="hint">{note}</div>)}
       {ready && !rigged && <PrintPanel key={job.id} jobId={job.id} />}
       {ready && !rigged && (
         <div className="row rig-start">
