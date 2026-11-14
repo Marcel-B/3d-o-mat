@@ -18,6 +18,7 @@ from . import assist, cutout
 from .animate import AnimationError, add_animations
 from .config import Config
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
+from .importer import ImportFailed, import_model
 from .jobs import OPEN, Jobs
 from .models3d import ApiError, Models3d, error as api_error
 from .motions import Library
@@ -28,6 +29,7 @@ from .skeleton import SkeletonError, move_joints
 from .store import NotMounted, Store, StoreError, new_id
 
 MAX_UPLOAD = 40 * 1024 * 1024
+MAX_MODEL = 200 * 1024 * 1024
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}
 
@@ -88,6 +90,11 @@ class PoseRequest(BaseModel):
 class PromptRequest(BaseModel):
     idea: str = Field(..., min_length=1, max_length=1000)
     lang: str = Field("de", pattern="^(de|en)$")
+
+
+def has_skeleton(doc: dict) -> bool:
+    """Ein Skelett von SkinTokens oder ein importiertes mit Mixamo-Namen; nur damit gehen Bewegungen und Gelenke."""
+    return doc.get("kind") == "rig" or (doc.get("kind") == "import" and (doc.get("import") or {}).get("skeleton") == "mixamo")
 
 
 def make_store(config: Config, log=print) -> Store:
@@ -312,6 +319,26 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
             raise HTTPException(422, "resolution: 512, 1024 oder 1536")
         return jobs.create(doc, options)
 
+    @app.post("/api/jobs/import")
+    async def import_figure(files: list[UploadFile] = File(...)):
+        """Eine eigene Figur: GLB, glTF oder OBJ, mit allem, was dazugehört (.bin, .mtl, Texturen), oder als ZIP."""
+        store.ensure_mounted()
+        received, total = {}, 0
+        for upload in files[:64]:
+            data = await upload.read(MAX_MODEL + 1 - total)
+            total += len(data)
+            if total > MAX_MODEL:
+                raise HTTPException(413, "Zusammen größer als 200 MB")
+            received[(upload.filename or "figur").replace("\\", "/").lstrip("/")] = data
+        try:
+            glb, info = await run_in_threadpool(import_model, received)
+        except ImportFailed as error:
+            raise HTTPException(422, str(error)) from error
+        fingers = None
+        if info["skeleton"] == "mixamo":
+            glb, fingers = jobs.name_fingers("import", glb)
+        return jobs.create_import(glb, info, fingers)
+
     @app.get("/api/jobs")
     def list_jobs():
         return jobs.all()
@@ -323,7 +350,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
     @app.post("/api/jobs/{job_id}/rig")
     def rig_job(job_id: str, request: RigRequest = RigRequest()):
         source = job(job_id)
-        if source.get("kind") == "rig":
+        if has_skeleton(source):
             raise HTTPException(409, "Dieses Modell hat schon ein Skelett")
         if source["state"] != "done":
             raise HTTPException(409, "Erst wenn das 3D-Modell fertig ist")
@@ -367,7 +394,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         if doc["state"] != "done":
             raise HTTPException(404, "Noch kein Modell")
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
-        suffix = "-skelett" if doc.get("kind") == "rig" else ""
+        suffix = "-skelett" if has_skeleton(doc) else ""
         headers = {"cache-control": "private, max-age=86400"}
         if download:
             headers["content-disposition"] = f'attachment; filename="{name}{suffix}-{job_id}.glb"'
@@ -376,7 +403,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
     @app.post("/api/jobs/{job_id}/animated.glb")
     def animated(job_id: str, request: AnimatedRequest):
         doc = job(job_id)
-        if doc.get("kind") != "rig" or doc["state"] != "done":
+        if not has_skeleton(doc) or doc["state"] != "done":
             raise HTTPException(409, "Nur ein fertiges Modell mit Skelett bekommt Animationen")
         try:
             data = add_animations(model_glb(doc), request.clips)
@@ -391,7 +418,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         """Verschiebt Gelenke des Skeletts im GLB des Auftrags. Das erste Mal bleibt das Original als
         skeleton-original.glb daneben liegen, damit „Zurücksetzen“ es wiederherstellen kann."""
         doc = job(job_id)
-        if doc.get("kind") != "rig" or doc["state"] != "done":
+        if not has_skeleton(doc) or doc["state"] != "done":
             raise HTTPException(409, "Nur ein fertiges Modell mit Skelett hat Gelenke")
         try:
             moves = {int(k): v for k, v in request.moves.items()}
@@ -430,7 +457,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         doc = job(job_id)
         if doc["state"] != "done":
             raise HTTPException(409, "Noch kein Modell")
-        if request.pose and doc.get("kind") != "rig":
+        if request.pose and not has_skeleton(doc):
             raise HTTPException(409, "Nur ein Modell mit Skelett hat eine Haltung")
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
         glb = model_glb(doc)

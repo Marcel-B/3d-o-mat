@@ -1,5 +1,5 @@
-"""Die Aufträge: Bild zu 3D, Skelett einsetzen (kind "rig", aus dem GLB eines fertigen 3D-Auftrags) und Aufträge der
-Schnittstelle unter /v1 (kind "api", models3d.py), alle in einer Schlange, einer nach dem anderen (TRELLIS.2 braucht
+"""Die Aufträge: Bild zu 3D, Skelett einsetzen (kind "rig", aus dem GLB eines fertigen 3D-Auftrags), eigene Figuren
+(kind "import", sofort fertig, importer.py) und Aufträge der Schnittstelle unter /v1 (kind "api", models3d.py), alle in einer Schlange, einer nach dem anderen (TRELLIS.2 braucht
 oi-o-mat ohnehin ganz). Jeder Auftrag liegt als job.json auf der T7 (über store.py); nach einem Neustart der App werden
 unterbrochene Aufträge der Seite neu eingereiht, die der Schnittstelle stehen als fehlgeschlagen da.
 """
@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 
 from .fingers import FingerError, name_fingers
+from .importer import without_skin
 from .gate import Gate, GateBusy, GateRefused, StreamBroken
 from .store import NotMounted, Store, StoreError, new_id
 
@@ -103,6 +104,22 @@ class Jobs:
         self.wake.set()
         return job
 
+    def create_import(self, glb: bytes, info: dict, fingers: dict | None) -> dict:
+        """Eine eigene Figur (importer.py): ist sofort fertig und steht dann da wie ein Auftrag aus einem Bild, mit
+        Skelett, wenn sie eines mit Mixamo-Namen mitbringt."""
+        self.store.ensure_mounted()
+        job_id = new_id()
+        self.store.put("jobs", job_id, "model.glb", glb)
+        stamp = now()
+        job = {
+            "id": job_id, "kind": "import", "imageId": None, "imageName": info["name"], "options": {},
+            "import": {key: info[key] for key in ("format", "triangles", "skeleton", "notes")},
+            "state": "done", "stage": None, "step": None, "total": None, "message": None,
+            "created": stamp, "queuedAt": time.time(), "started": stamp, "finished": stamp, "seconds": None,
+            "glbBytes": len(glb), "attempts": 0, **({"fingers": fingers} if fingers is not None else {}),
+        }
+        return self.save(job)
+
     def cancel(self, job_id: str) -> dict:
         job = self.get(job_id)
         if job["state"] != "queued":
@@ -168,7 +185,8 @@ class Jobs:
         try:
             report = None
             if job.get("kind") == "rig":
-                source = self.store.get("jobs", job["sourceJobId"], "model.glb")
+                # Eine importierte Figur kann ein fremdes Skelett mitbringen; SkinTokens bekommt nur das Netz.
+                source = without_skin(self.store.get("jobs", job["sourceJobId"], "model.glb"))
 
                 def work():
                     self.update(job_id, state="running", stage="skeleton", message="SkinTokens setzt das Skelett ein")

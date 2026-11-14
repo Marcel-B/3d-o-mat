@@ -31,7 +31,9 @@ export type Options = {
 
 export type Job = {
   id: string;
-  kind?: 'rig' | 'api';
+  kind?: 'rig' | 'api' | 'import';
+  // Eigene Figuren (omat3d/importer.py): skeleton "mixamo" geht gleich in die Bibliothek, "other" bekommt eins von SkinTokens.
+  import?: { format: 'glb' | 'gltf' | 'obj'; triangles: number; skeleton: 'mixamo' | 'other' | null; notes: string[] };
   // Aufträge der Schnittstelle (/v1): wer bestellt hat und unter welchem Namen.
   api?: { app: string | null; creator: string | null; label: string | null };
   sourceJobId?: string;
@@ -127,6 +129,11 @@ export const api = {
   paintings: () => call<Painting[]>('GET', '/api/paint'),
   jobs: () => call<Job[]>('GET', '/api/jobs'),
   createJob: (imageId: string, options: Options) => call<Job>('POST', '/api/jobs', { imageId, options }),
+  importFigure: (files: File[]) => {
+    const form = new FormData();
+    for (const file of files) form.append('files', file, file.name);
+    return call<Job>('POST', '/api/jobs/import', form);
+  },
   rigJob: (id: string, kind: string, seed = 1) => call<Job>('POST', `/api/jobs/${id}/rig`, { class: kind, seed }),
   // Die Proben als Animationen im GLB; zurück kommt die Datei.
   motions: () => fetch('/api/motions').then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() as Promise<MotionIndex>; }),
@@ -163,6 +170,10 @@ export const api = {
   cancelJob: (id: string) => call<Job>('POST', `/api/jobs/${id}/cancel`),
   deleteJob: (id: string) => call('DELETE', `/api/jobs/${id}`),
 };
+
+// Wie omat3d/app.py has_skeleton: ein Skelett von SkinTokens oder ein importiertes mit Mixamo-Namen.
+export const hasSkeleton = (job: Job | null | undefined) =>
+  job?.kind === 'rig' || (job?.kind === 'import' && job.import?.skeleton === 'mixamo');
 
 export const cutoutUrl = (id: string) => `/api/images/${id}/cutout`;
 export const originalUrl = (id: string) => `/api/images/${id}/original`;
