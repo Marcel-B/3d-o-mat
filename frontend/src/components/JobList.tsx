@@ -22,6 +22,7 @@ function stageLabel(stage: string | null, t: Texts['jobs']) {
 const minutes = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} min`;
 
 function duration(job: Job, t: Texts['jobs']) {
+  if (job.kind === 'import') return '';
   if (job.seconds !== null) return minutes(job.seconds);
   if (job.started) return t.since(minutes(Math.max(0, Math.round((Date.now() - Date.parse(job.started)) / 1000))));
   return '';
@@ -52,6 +53,7 @@ export function JobList({ jobs, selected, onSelect, onChanged }: Props) {
               <div className="row tight">
                 <strong>{job.imageName ?? job.imageId ?? job.id}</strong>
                 {job.kind === 'rig' && <span className="pill muted">{t.skeleton}</span>}
+                {job.kind === 'import' && <span className="pill muted">{t.imported}</span>}
                 {job.kind === 'api' && <span className="pill muted" title={t.viaApi}>{job.api?.creator || 'API'}</span>}
                 <span className={`pill ${tones[job.state]}`}>{t.states[job.state]}</span>
                 <span className="muted small">{duration(job, t)}</span>

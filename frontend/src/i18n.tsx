@@ -91,6 +91,13 @@ const de = {
     copyFailed: 'Kopieren geht nur über https oder localhost; den Text bitte markieren.',
   },
 
+  figure: {
+    title: 'Eigene Figur importieren',
+    choose: 'GLB, glTF oder OBJ hierher ziehen oder klicken',
+    advice: 'Mit allem, was dazugehört (.bin, .mtl, Texturen), auf einmal oder als ZIP. Bringt die Figur ein Skelett mit Mixamo-Namen mit (etwa von Mixamo), geht sie gleich in die Bewegungsbibliothek; sonst setzt SkinTokens eins ein.',
+    reading: 'Liest die Figur …',
+  },
+
   viewer: {
     model: 'Modell',
     rigged: 'Modell mit Skelett',
@@ -100,6 +107,7 @@ const de = {
     downloadRigged: 'GLB mit Skelett herunterladen',
     download: 'GLB herunterladen',
     computed: (time: string) => ` · ${time} gerechnet`,
+    imported: (format: string, triangles: string) => ` · importiert aus ${format}, ${triangles} Dreiecke`,
     riggedHint: ' · Knochen mit Mixamo-Namen, Animationen von Mixamo passen direkt',
     plainHint: ' · GLB mit PBR-Texturen, öffnet in Blender, Godot, Unity, Windows-3D-Viewer, Vorschau',
     toRigged: 'Zum Modell mit Skelett',
@@ -217,6 +225,7 @@ const de = {
     stages: { cutout: 'Freistellen', coarse: 'Grobform', shape: 'Form', texture: 'Textur', finish: 'Abschluss', skeleton: 'Skelett und Gewichte' },
     since: (time: string) => `seit ${time}`,
     skeleton: 'Skelett',
+    imported: 'importiert',
     viaApi: 'über die Schnittstelle bestellt',
     cancel: 'abbrechen',
     delete: 'löschen',
@@ -313,6 +322,13 @@ const en: Texts = {
     copyFailed: 'Copying only works over https or on localhost; please select the text instead.',
   },
 
+  figure: {
+    title: 'Import your own figure',
+    choose: 'Drop a GLB, glTF or OBJ here or click',
+    advice: 'With everything that belongs to it (.bin, .mtl, textures), all at once or as a ZIP. A figure with a skeleton using Mixamo names (from Mixamo, say) goes straight to the motion library; otherwise SkinTokens puts one in.',
+    reading: 'Reading the figure …',
+  },
+
   viewer: {
     model: 'Model',
     rigged: 'Model with skeleton',
@@ -322,6 +338,7 @@ const en: Texts = {
     downloadRigged: 'Download GLB with skeleton',
     download: 'Download GLB',
     computed: (time: string) => ` · computed in ${time}`,
+    imported: (format: string, triangles: string) => ` · imported from ${format}, ${triangles} triangles`,
     riggedHint: ' · bones with Mixamo names, Mixamo animations fit directly',
     plainHint: ' · GLB with PBR textures, opens in Blender, Godot, Unity, Windows 3D Viewer, Preview',
     toRigged: 'Go to the model with skeleton',
@@ -437,6 +454,7 @@ const en: Texts = {
     stages: { cutout: 'Cutting out', coarse: 'Coarse shape', shape: 'Shape', texture: 'Texture', finish: 'Finishing', skeleton: 'Skeleton and weights' },
     since: (time: string) => `for ${time}`,
     skeleton: 'Skeleton',
+    imported: 'imported',
     viaApi: 'ordered through the API',
     cancel: 'cancel',
     delete: 'delete',

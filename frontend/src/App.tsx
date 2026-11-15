@@ -3,6 +3,7 @@ import { api, type Image, type Job, type Status } from './api';
 import { StatusBar } from './components/StatusBar';
 import { ImagePanel } from './components/ImagePanel';
 import { PromptPanel } from './components/PromptPanel';
+import { ImportPanel } from './components/ImportPanel';
 import { JobList } from './components/JobList';
 import { Viewer } from './components/Viewer';
 import { Settings } from './components/Settings';
@@ -68,6 +69,7 @@ export default function App() {
             onStarted={newJob => { refreshJobs(); setSelectedJob(newJob.id); }}
           />
           <PromptPanel status={status} onPainted={ids => { refreshImages(); setSelectedImage(ids[0]); }} />
+          <ImportPanel status={status} onImported={figure => { refreshJobs(); setSelectedJob(figure.id); }} />
         </section>
         <section className="column">
           <Viewer job={job} jobs={jobs ?? []} scheme={scheme} onRigStarted={rigJob => { refreshJobs(); setSelectedJob(rigJob.id); }} />
