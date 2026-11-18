@@ -1,5 +1,6 @@
 """Die Aufträge: Bild zu 3D, Skelett einsetzen (kind "rig", aus dem GLB eines fertigen 3D-Auftrags), eigene Figuren
-(kind "import", sofort fertig, importer.py) und Aufträge der Schnittstelle unter /v1 (kind "api", models3d.py), alle in einer Schlange, einer nach dem anderen (TRELLIS.2 braucht
+(kind "import", sofort fertig, importer.py), Aufträge der Schnittstelle unter /v1 (kind "api", models3d.py) und
+Aufbereitungen einer Figur in Blender (kind "prep", figures.py), alle in einer Schlange, einer nach dem anderen (TRELLIS.2 braucht
 oi-o-mat ohnehin ganz). Jeder Auftrag liegt als job.json auf der T7 (über store.py); nach einem Neustart der App werden
 unterbrochene Aufträge der Seite neu eingereiht, die der Schnittstelle stehen als fehlgeschlagen da.
 """
@@ -29,8 +30,11 @@ def order(job: dict) -> tuple:
 
 class Jobs:
     def __init__(self, store: Store, gate: Gate, model: str, defaults: dict, log=print, rig_model: str = "skintokens",
-                 on_finish=None, api=None):
+                 on_finish=None, api=None, prep_model: str = "figur-aufbereiten", figures=None):
         self.store = store
+        # Ablegen, was der Aufbereitungs-Dienst liefert (figures.Figures), sonst None.
+        self.figures = figures
+        self.prep_model = prep_model
         # Freistellen und GLB fertig machen für Aufträge der Schnittstelle (models3d.Models3d), sonst None.
         self.api = api
         # Bekommt jeden Auftrag, der fertig oder fehlgeschlagen ist (Onkel Bummel); muss sofort zurückkehren.
@@ -104,6 +108,20 @@ class Jobs:
         self.wake.set()
         return job
 
+    def create_prep(self, fields: dict) -> dict:
+        """Eine Figur aufbereiten (figures.py): fields sind file (SHA-256 der .blend), options und api; bei einer
+        Spielerfigur dazu player (name, head und rig als SHA-256)."""
+        self.store.ensure_mounted()
+        job_id = new_id()
+        job = {
+            "id": job_id, "kind": "prep", "imageId": None, "imageName": fields["api"].get("label") or "Figur", **fields,
+            "state": "queued", "stage": None, "step": None, "total": None, "message": None, "result": None,
+            "created": now(), "queuedAt": time.time(), "started": None, "finished": None, "seconds": None, "glbBytes": None, "attempts": 0,
+        }
+        self.save(job)
+        self.wake.set()
+        return job
+
     def create_import(self, glb: bytes, info: dict, fingers: dict | None) -> dict:
         """Eine eigene Figur (importer.py): ist sofort fertig und steht dann da wie ein Auftrag aus einem Bild, mit
         Skelett, wenn sie eines mit Mixamo-Namen mitbringt."""
@@ -131,7 +149,7 @@ class Jobs:
         Schnittstelle steht dagegen als fehlgeschlagen da, mit Grund: sein Absender soll wissen, dass er neu bestellen
         muss, statt dass derselbe Seed womöglich ein zweites Mal Minuten rechnet."""
         for job in self.all():
-            if job["state"] in ("waiting", "running") and job.get("kind") == "api":
+            if job["state"] in ("waiting", "running") and job.get("kind") in ("api", "prep"):
                 self.update(job["id"], state="failed", stage=None, finished=now(),
                             message="durch einen Neustart von 3d-o-mat abgebrochen")
             elif job["state"] in ("waiting", "running"):
@@ -184,7 +202,22 @@ class Jobs:
         finished = None
         try:
             report = None
-            if job.get("kind") == "rig":
+            if job.get("kind") == "prep":
+                blend = self.store.get("files", job["file"], "data")
+                player = job.get("player")
+                parts = {key: self.store.get("files", player[key], "data") for key in ("head", "rig")} if player else {}
+
+                def work():
+                    self.update(job_id, state="running", stage="prepare",
+                                message="Blender baut die Spielerfigur (Kopf, Aufbereiten, Rig)" if player else
+                                "Blender bereitet die Figur auf (etwa 10 bis 20 Minuten)")
+                    if player:
+                        payload = self.gate.player_figure(self.prep_model, parts["head"], blend, parts["rig"],
+                                                          player["name"], job["options"])
+                    else:
+                        payload = self.gate.prepare_figure(self.prep_model, blend, job["options"])
+                    return payload["files"]["glb"], payload
+            elif job.get("kind") == "rig":
                 # Eine importierte Figur kann ein fremdes Skelett mitbringen; SkinTokens bekommt nur das Netz.
                 source = without_skin(self.store.get("jobs", job["sourceJobId"], "model.glb"))
 
@@ -220,7 +253,11 @@ class Jobs:
                         raise
                     self.update(job_id, state="waiting", message=f"{error}; neuer Versuch in {int(error.retry_after)} s")
                     self.stop.wait(error.retry_after)
-            fingers = result = None
+            fingers = result = failure = None
+            if job.get("kind") == "prep":
+                self.update(job_id, state="running", stage="export", message="Dateien ablegen")
+                glb, result, failure = self.figures.finish(job, report)
+                report = None
             if job.get("kind") == "api":
                 self.update(job_id, state="running", stage="export", step=None, total=None, message="GLB fertig machen")
                 glb, result = self.api.finish(job, glb)
@@ -230,11 +267,13 @@ class Jobs:
             # launch.py schreibt daneben und benennt dann um: nie ein halbes GLB auf der T7.
             self.store.put("jobs", job_id, "model.glb", glb)
             seconds = round(time.monotonic() - started)
-            finished = self.update(job_id, state="done", finished=now(), seconds=seconds, glbBytes=len(glb), message=None,
-                                   stage=None, **({"report": report} if report is not None else {}),
+            # Exit-Code 2 der Aufbereitung: das Skript lief durch, nur die Prüfung nicht; die Dateien bleiben zum Ansehen.
+            finished = self.update(job_id, state="failed" if failure else "done", finished=now(), seconds=seconds,
+                                   glbBytes=len(glb), message=failure, stage=None,
+                                   **({"report": report} if report is not None else {}),
                                    **({"fingers": fingers} if fingers is not None else {}),
                                    **({"result": result} if result is not None else {}))
-            self.log(f"{job_id}: fertig in {seconds} s, {len(glb) // 1024} KB")
+            self.log(f"{job_id}: {failure}" if failure else f"{job_id}: fertig in {seconds} s, {len(glb) // 1024} KB")
         except GateRefused as error:
             hint = " Freigeben oder installieren in der Oberfläche der Schranke (/gate)." if error.status in (403, 424) else ""
             finished = self.update(job_id, state="failed", finished=now(), message=f"{error}.{hint}")

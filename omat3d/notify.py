@@ -55,17 +55,19 @@ class Notifier:
             self.log(f"Onkel Bummel: {error!r}")
 
     def message_of(self, job: dict) -> dict:
-        rig = job.get("kind") == "rig"
+        kind = job.get("kind")
+        done = {"rig": "Skelett fertig", "prep": "Figur aufbereitet"}.get(kind, "3D-Modell fertig")
+        failed = {"rig": "Skelett fehlgeschlagen", "prep": "Aufbereitung fehlgeschlagen"}.get(kind, "3D-Modell fehlgeschlagen")
         name = job.get("imageName") or job.get("imageId")
         message = {"topic": self.settings.get("topic") or "3d-o-mat"}
         if job["state"] == "done":
             seconds = job.get("seconds") or 0
             took = f"{seconds / 60:.0f} min" if seconds >= 90 else f"{seconds} s"
             size = f", {job['glbBytes'] / 1024 / 1024:.1f} MB" if job.get("glbBytes") else ""
-            message.update(title=f"Skelett fertig: {name}" if rig else f"3D-Modell fertig: {name}", priority=3,
+            message.update(title=f"{done}: {name}", priority=3,
                            tags=["white_check_mark", "3d-o-mat"], message=f"In {took}{size}.")
         else:
-            message.update(title=f"Skelett fehlgeschlagen: {name}" if rig else f"3D-Modell fehlgeschlagen: {name}",
+            message.update(title=f"{failed}: {name}",
                            priority=4, tags=["warning", "3d-o-mat"], message=job.get("message") or "Unbekannter Fehler.")
         if picture := self.picture(job):
             message["images"] = [{"data": base64.b64encode(picture).decode("ascii"), "filename": f"{job['imageId']}.png"}]

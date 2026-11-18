@@ -6,6 +6,7 @@ const tones: Record<Job['state'], string> = { queued: 'muted', waiting: 'warn', 
 // TRELLIS.2 meldet Stufen wie "trellis-shape-1024"; lesbar: "Form (1024)". Unbekannte bleiben, wie sie sind.
 const stages: [RegExp, keyof Texts['jobs']['stages']][] = [
   [/^cutout$/, 'cutout'],
+  [/^prepare$/, 'prepare'],
   [/sparse|structure/, 'coarse'],
   [/shape|geometry|mesh/, 'shape'],
   [/tex|paint|material|bake/, 'texture'],
@@ -54,6 +55,7 @@ export function JobList({ jobs, selected, onSelect, onChanged }: Props) {
                 <strong>{job.imageName ?? job.imageId ?? job.id}</strong>
                 {job.kind === 'rig' && <span className="pill muted">{t.skeleton}</span>}
                 {job.kind === 'import' && <span className="pill muted">{t.imported}</span>}
+                {job.kind === 'prep' && <span className="pill muted" title={t.viaApi}>{t.prepared}</span>}
                 {job.kind === 'api' && <span className="pill muted" title={t.viaApi}>{job.api?.creator || 'API'}</span>}
                 <span className={`pill ${tones[job.state]}`}>{t.states[job.state]}</span>
                 <span className="muted small">{duration(job, t)}</span>
