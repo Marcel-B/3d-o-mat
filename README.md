@@ -145,7 +145,7 @@ curl -sS -o kopf.glb "$URL/v1/files/$GLB" -H "$AUTH"
 
 ## Für Agents: MCP (`/mcp`)
 
-3d-o-mat ist auch ein MCP-Server, damit Agents wie Claude Code damit arbeiten können: ein Bild hochladen oder malen lassen, prüfen, in 3D umwandeln, auf das Ergebnis warten, ein Skelett einsetzen und das Modell als GLB, 3MF oder STL holen (FBX, sobald 3d-o-mat es kann). Er läuft im selben Container wie die Seite, unter derselben Adresse, und braucht auf dem Rechner des Agents nichts außer dem Eintrag. Wie `/v1` gehört er nur ins Heimnetz und ins Tailnet; angemeldet wird nicht.
+3d-o-mat ist auch ein MCP-Server, damit Agents wie Claude Code damit arbeiten können: ein Bild hochladen oder malen lassen, prüfen, in 3D umwandeln, auf das Ergebnis warten, ein Skelett einsetzen und das Modell als GLB, 3MF, STL oder FBX (für Unity und Unreal) holen. Er läuft im selben Container wie die Seite, unter derselben Adresse, und braucht auf dem Rechner des Agents nichts außer dem Eintrag. Wie `/v1` gehört er nur ins Heimnetz und ins Tailnet; angemeldet wird nicht.
 
 **In Claude Code einbinden** (auf einem Rechner im Heimnetz oder im Tailnet):
 
