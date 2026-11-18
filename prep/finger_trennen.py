@@ -1,142 +1,241 @@
 """Trennt zusammengewachsene Finger einer gerigten Figur (bpy 5.3).
 
-Trellis laesst eng anliegende Finger an den Beruehrungsstellen zusammenwachsen, und das Verkleinern macht daraus
-duenne Bruecken-Dreiecke zwischen zwei Fingern. In Ruhe stehen sie als Splitter zwischen den Fingern, sobald die
-Finger sich bewegen, ziehen sie Faeden. Bruecke heisst hier: alle drei Punkte gehoeren ueberwiegend zu Fingerknochen
-(nicht zur Hand), aber nicht alle zum selben Finger. Der Daumen zaehlt wie ein Finger.
+Trellis laesst eng anliegende Finger zusammenwachsen ("Haut zwischen den Fingern"). Mit einem Rig, dessen
+Fingergewichte unterhalb der Fingerspalte hart einem Finger gehoeren (Vorlage aus finger_neu.py, z. B. Klein v3),
+werden je Hand und Nachbarpaar (Zeige-Mittel, Mittel-Ring, Ring-klein) die Flaechen entfernt, die beide Finger
+verbinden und unterhalb der Spalte liegen. Die Oeffnungen werden wieder geschlossen: je Finger eine Seitenwand,
+dazu der neue Grund der Spalte. Es kommen keine neuen Punkte dazu, die Gewichte bleiben.
 
-Die Bruecken werden geloescht, die Oeffnungen, die dadurch an jedem Finger entstehen, je Finger mit einem Faecher
-um einen neuen Mittelpunkt geschlossen.
-Die neuen Flaechen bekommen die UV des naechsten vorhandenen Eckpunkts (sie liegen verdeckt zwischen den Fingern)
-und dieselben Gewichte wie ihre Punkte, die ja schon da sind.
+Die neuen Flaechen sind einfarbig: alle Ecken bekommen den hellsten hautfarbenen Texturpunkt der Nachbarschaft
+(sonst landen sie oft auf dunklen Naht- oder Handschuhpunkten). Ihre eigene Normale ist die Flaechennormale.
+Fingerflaechen, deren Textur quer ueber den Atlas reicht (sichtbar als Streifen), werden ebenso auf Haut gesetzt.
 
-    trennen(mesh_object) -> Anzahl geloeschter Bruecken
+    trennen(mesh_object, armature, log=print) -> Bericht (dict)
 """
 import bmesh
+import numpy as np
+from mathutils import Vector
 
-FINGERS = ('Thumb', 'Index', 'Middle', 'Ring', 'Pinky')
+P = 'mixamorig:'
+FINGER = ('Index', 'Middle', 'Ring', 'Pinky')
+SPALTE = 0.30          # Anteil der Fingerlaenge unter den Knoecheln, ab dem die Finger getrennt sind (wie finger_neu)
 
 
-def _finger(name):
-    if 'Hand' not in name:
-        return None
-    for f in FINGERS:
-        if 'Hand' + f in name:
-            return name[:name.index('Hand')] + f   # z. B. mixamorig:Left + Ring
+def _farbbild(obj):
+    for m in obj.data.materials:
+        if m and m.use_nodes:
+            for n in m.node_tree.nodes:
+                if n.type == 'TEX_IMAGE' and n.image and any(l.to_socket.name == 'Base Color'
+                                                            for o in n.outputs for l in o.links):
+                    return n.image
     return None
 
 
-def trennen(obj, log=print):
+def _ringe(kanten):
+    """Randkanten in einfache Ringe zerlegen (auch wenn sich zwei Ringe in einem Punkt beruehren)"""
+    nb = {}
+    for e in kanten:
+        a, b = e.verts
+        nb.setdefault(a, set()).add(b)
+        nb.setdefault(b, set()).add(a)
+    out = []
+    while True:
+        start = next((v for v in sorted(nb, key=lambda v: -len(nb[v])) if nb[v]), None)
+        if start is None:
+            break
+        path = [start]
+        while True:
+            cur = path[-1]
+            if not nb[cur]:
+                path = None
+                break
+            nxt = nb[cur].pop()
+            nb[nxt].discard(cur)
+            if nxt in path:
+                i = path.index(nxt)
+                out.append(path[i:])
+                path = path[:i + 1]
+                if len(path) == 1:
+                    break
+            else:
+                path.append(nxt)
+        if path is None:
+            out.append(None)
+    return out
+
+
+def trennen(obj, arm, log=print):
     me = obj.data
-    names = {g.index: g.name for g in obj.vertex_groups}
+    MW = obj.matrix_world
+    gi = {g.index: g.name for g in obj.vertex_groups}
+    bericht = {}
     bm = bmesh.new()
     bm.from_mesh(me)
-    # An UV-Naehten liegen Punkte doppelt (glTF trennt sie); verschweisst laufen die Raender um die Luecke als eine
-    # Kette. Die UVs haengen an den Ecken der Flaechen und bleiben dabei, wie sie sind.
+    # An UV-Naehten liegen Punkte doppelt (glTF trennt sie); sonst gaelten die Naehte als Raender. Die UVs haengen an
+    # den Ecken der Flaechen und bleiben dabei, wie sie sind.
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-6)
-    bm.verts.index_update()
-    bm.verts.ensure_lookup_table()
-    bm.faces.ensure_lookup_table()
-    deform = bm.verts.layers.deform.active
-    owner = []
-    for v in bm.verts:
-        weights = v[deform] if deform is not None else {}
-        if not weights:
-            owner.append(None)
-            continue
-        name = names.get(max(weights.items(), key=lambda kv: kv[1])[0], '')
-        # Nur Mittel- und Endglieder: am Grundglied steckt der Finger im Handschuh, dort ist das Netz zusammen
-        # gewollt, und die Textur der Luecke waere sichtbar.
-        owner.append(_finger(name) if name[-1:] in ('2', '3') else None)
-    bridges = []
-    for f in bm.faces:
-        fs = [owner[v.index] for v in f.verts]
-        if all(fs) and len(set(fs)) > 1:
-            bridges.append(f)
-    if not bridges:
-        bm.free()
-        return 0
-    touched = {e for f in bridges for e in f.edges}
-    bmesh.ops.delete(bm, geom=bridges, context='FACES_ONLY')
-    # Die neuen Raender laufen um die Luecke zwischen zwei Fingern herum, ueber beide Finger. Jeder Finger bekommt
-    # seinen Teil des Randes einzeln geschlossen (Faecher um einen neuen Mittelpunkt), sonst entstuende die Bruecke neu.
-    border = [e for e in touched if e.is_valid and e.is_boundary]
     uv = bm.loops.layers.uv.active
-    nbr = {}
-    for e in border:
-        a, b = e.verts
-        nbr.setdefault(a, []).append(b)
-        nbr.setdefault(b, []).append(a)
-    seen, chains = set(), []
-    for start in list(nbr):
-        if start in seen:
+    dl = bm.verts.layers.deform.active
+    neu_lay = bm.faces.layers.int.new('finger_neu_flaeche')
+    if dl is None:
+        bm.free()
+        log('Finger getrennt: keine Gewichte')
+        return {'fehler': 'keine Gewichte'}
+
+    bild = _farbbild(obj)
+    if bild is not None and bild.size[0] > 0:
+        TW, TH = bild.size
+        tex = np.array(bild.pixels[:], dtype=np.float32).reshape(TH, TW, -1)[:, :, :3]
+    else:
+        tex = None
+
+    def farbe(u):
+        return tex[min(TH - 1, max(0, int((u.y % 1) * TH))), min(TW - 1, max(0, int((u.x % 1) * TW)))]
+
+    def uv_spanne(f):
+        return max((l[uv].uv - f.loops[0][uv].uv).length for l in f.loops)
+
+    def hautpunkt(verts, ausser):
+        """Hellster hautfarbener Texturpunkt (rot > gruen > blau) an den Ecken der Nachbarflaechen"""
+        beste, wert = None, -1
+        for v in verts:
+            for l in v.link_loops:
+                if l.face in ausser or not l.face.is_valid or l.face[neu_lay] or uv_spanne(l.face) > 0.1:
+                    continue
+                if tex is None:
+                    return l[uv].uv.copy()
+                c = farbe(l[uv].uv)
+                w = float(c.sum()) + (1.0 if c[0] > c[1] > c[2] else 0.0)
+                if w > wert:
+                    beste, wert = l[uv].uv.copy(), w
+        return beste
+
+    neu_alle = set()
+
+    def neue_flaeche(verts, vorbild, nach):
+        try:
+            f = bm.faces.new(verts)
+        except ValueError:
+            return []
+        f.material_index = vorbild.material_index
+        f.smooth = vorbild.smooth
+        f.normal_update()
+        if f.normal.dot(nach) < 0:
+            f.normal_flip()
+        f[neu_lay] = 1
+        if uv:
+            hp = hautpunkt(f.verts, {f} | neu_alle)
+            if hp is not None:
+                for l in f.loops:
+                    l[uv].uv = hp.copy()
+        neu_alle.add(f)
+        if len(verts) > 3:
+            r = bmesh.ops.triangulate(bm, faces=[f])
+            for t in r['faces']:
+                t[neu_lay] = 1
+            neu_alle.discard(f)
+            neu_alle.update(r['faces'])
+            return r['faces']
+        return [f]
+
+    for side in ('Right', 'Left'):
+        lab = {}
+        for v in bm.verts:
+            s = np.zeros(4)
+            for g, w in v[dl].items():
+                for k, fn in enumerate(FINGER):
+                    if f'{side}Hand{fn}' in gi.get(g, ''):
+                        s[k] += w
+            if s.sum() > 0.05:
+                lab[v] = int(np.argmax(s))
+        if not lab:
+            bericht[side] = 'keine Finger'
             continue
-        # Kette je Finger: zusammenhaengende Randpunkte desselben Fingers
-        who = owner[start.index] if start.index < len(owner) else None
-        if who is None:
-            seen.add(start)
-            continue
-        part, stack = [], [start]
-        seen.add(start)
-        while stack:
-            v = stack.pop()
-            part.append(v)
-            for n in nbr.get(v, []):
-                if n not in seen and n.index < len(owner) and owner[n.index] == who:
-                    seen.add(n)
-                    stack.append(n)
-        if len(part) >= 3:
-            chains.append(part)
-    new = []
-    for part in chains:
-        # Reihenfolge entlang des Randes
-        ends = [v for v in part if sum(1 for n in nbr[v] if n in part) < 2] or part[:1]
-        order, cur, prev = [ends[0]], ends[0], None
-        while True:
-            nxt = [n for n in nbr[cur] if n in part and n is not prev and n not in order]
-            if not nxt:
-                break
-            prev, cur = cur, nxt[0]
-            order.append(cur)
-        if len(order) < 3:
-            continue
-        centre = bm.verts.new(sum((v.co for v in order), order[0].co * 0) / len(order))
-        if deform is not None:
-            near = min(order, key=lambda v: (v.co - centre.co).length)
-            for k, w in near[deform].items():
-                centre[deform][k] = w
-        for a, b in zip(order, order[1:] + order[:1]):
-            try:
-                f = bm.faces.new((a, b, centre))
-            except ValueError:
+        zk = float(np.mean([(arm.matrix_world @ arm.data.bones[f'{P}{side}Hand{f}1'].head_local).z for f in FINGER]))
+        zmin = min((MW @ v.co).z for v in lab)
+        z_spalt = zk - SPALTE * (zk - zmin)
+        info = {}
+        for k in range(3):
+            paar = f'{FINGER[k]}-{FINGER[k + 1]}'
+            lab = {v: l for v, l in lab.items() if v.is_valid}      # lose Punkte des vorigen Paars sind geloescht
+            weg = [f for f in bm.faces if all(v in lab for v in f.verts)
+                   and {lab[v] for v in f.verts} == {k, k + 1} and (MW @ f.calc_center_median()).z < z_spalt]
+            if not weg:
+                info[paar] = 'schon getrennt'
                 continue
-            new.append(f)
-    # Kleine Restloecher (bis 8 Kanten), wo eine Seite zu kurz fuer einen eigenen Faecher war: lieber ein winziges
-    # Stueck Steg tief in der Luecke als ein Loch.
-    rest = [e for e in bm.edges if e.is_valid and e.is_boundary and
-            (e in touched or any(f in new for f in e.link_faces))]
-    if rest:
-        before = set(bm.faces)
-        bmesh.ops.holes_fill(bm, edges=rest, sides=8)
-        new += [f for f in bm.faces if f not in before]
+            beruehrt = {v for f in weg for v in f.verts}
+            nA = max(1, sum(1 for v in lab if lab[v] == k))
+            nB = max(1, sum(1 for v in lab if lab[v] == k + 1))
+            cA = sum((v.co for v in lab if lab[v] == k), Vector()) / nA
+            cB = sum((v.co for v in lab if lab[v] == k + 1), Vector()) / nB
+            bmesh.ops.delete(bm, geom=weg, context='FACES_ONLY')
+            rand = [e for e in bm.edges if e.is_boundary and e.verts[0] in beruehrt and e.verts[1] in beruehrt]
+            gefuellt = fehler = 0
+            for ring in _ringe(rand):
+                if ring is None or len(ring) < 3:
+                    fehler += 1
+                    continue
+                vorbild = next(f for v in ring for f in v.link_faces)
+                labs = [lab.get(v, k) for v in ring]
+                if len(set(labs)) == 1:
+                    other, own = (cB, cA) if labs[0] == k else (cA, cB)
+                    gefuellt += len(neue_flaeche(ring, vorbild, other - own))
+                    continue
+                n = len(ring)
+                s0 = next(i for i in range(n) if labs[i] != labs[i - 1])
+                ring = ring[s0:] + ring[:s0]
+                labs = labs[s0:] + labs[:s0]
+                laeufe = []
+                for v, l in zip(ring, labs):
+                    if laeufe and laeufe[-1][0] == l:
+                        laeufe[-1][1].append(v)
+                    else:
+                        laeufe.append([l, [v]])
+                if len(laeufe) != 2:
+                    fehler += 1
+                    continue
+                (la, A), (lb, B) = laeufe
+                for l, kette in ((la, A), (lb, B)):
+                    own, other = (cA, cB) if l == k else (cB, cA)
+                    if len(kette) >= 3:
+                        gefuellt += len(neue_flaeche(kette, vorbild, other - own))
+                grund = [A[0], A[-1], B[0], B[-1]]
+                grund = [v for i, v in enumerate(grund) if v not in grund[:i]]
+                if len(grund) >= 3:
+                    gefuellt += len(neue_flaeche(grund, vorbild, Vector((0, 0, -1)) @ MW.to_3x3()))
+            lose_k = [e for v in beruehrt if v.is_valid for e in v.link_edges if not e.link_faces]
+            if lose_k:
+                bmesh.ops.delete(bm, geom=list(set(lose_k)), context='EDGES')
+            lose_p = [v for v in beruehrt if v.is_valid and not v.link_faces]
+            if lose_p:
+                bmesh.ops.delete(bm, geom=lose_p, context='VERTS')
+            info[paar] = dict(entfernt=len(weg), neu=gefuellt, nicht_geschlossen=fehler)
+        if uv:
+            lab = {v: l for v, l in lab.items() if v.is_valid}
+            streifen = [f for f in bm.faces if f.is_valid and all(v in lab for v in f.verts) and uv_spanne(f) > 0.1]
+            for f in streifen:
+                hp = hautpunkt(f.verts, set(streifen))
+                if hp is not None:
+                    for l in f.loops:
+                        l[uv].uv = hp.copy()
+            info['streifen_auf_haut'] = len(streifen)
+        bericht[side] = dict(spalte_z=round(z_spalt, 3), **info)
+
     bm.normal_update()
-    if uv is not None:
-        for f in new:
-            for loop in f.loops:
-                others = [l for l in loop.vert.link_loops if l.face not in new]
-                if not others:
-                    # der neue Mittelpunkt: UV des naechsten Punkts im Faecher
-                    src = min((l for l in f.loops if l is not loop), key=lambda l: (l.vert.co - loop.vert.co).length)
-                    others = [l for l in src.vert.link_loops if l.face not in new]
-                if others:
-                    loop[uv].uv = others[0][uv].uv
-    for f in new:
-        f.material_index = next((l.face.material_index for v in f.verts for l in v.link_loops if l.face not in new), 0)
-        f.smooth = True
-    if new:
-        bmesh.ops.recalc_face_normals(bm, faces=new)
     bm.to_mesh(me)
     bm.free()
     me.update()
-    log(f'Finger getrennt: {len(bridges)} Bruecken-Dreiecke entfernt, {len(chains)} Seiten mit {len(new)} Dreiecken geschlossen')
-    return len(bridges)
+    neu = me.attributes.get('finger_neu_flaeche')
+    if neu is not None:
+        cn = [c.vector.copy() for c in me.corner_normals]
+        anzahl = 0
+        for p in me.polygons:
+            if neu.data[p.index].value:
+                anzahl += 1
+                for li in p.loop_indices:
+                    cn[li] = p.normal.copy()
+        me.normals_split_custom_set(cn)
+        me.attributes.remove(me.attributes['finger_neu_flaeche'])
+        bericht['neue_flaechen'] = anzahl
+    log('Finger getrennt: ' + ', '.join(f'{s} {bericht[s]}' for s in ('Right', 'Left') if s in bericht))
+    return bericht
