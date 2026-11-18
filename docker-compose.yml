@@ -1,6 +1,9 @@
 # Im LXC auf dem Proxmox: docker compose up -d --build (Einrichtung im README).
 services:
   3d-o-mat:
+    # Fertig gebaut von GitHub Actions (.github/workflows/image.yml); welches, steht in .env (deploy/proxmox/start-image.sh).
+    # build bleibt für einen Bau hier (start-image.sh --bauen) und für lokale Versuche.
+    image: ${OMAT3D_IMAGE:-ghcr.io/marcel-b/3d-o-mat:main}
     build: .
     container_name: 3d-o-mat
     restart: unless-stopped

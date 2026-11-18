@@ -238,9 +238,9 @@ bash /root/3d-o-mat-lxc.sh app <CTID>    # 2. Repo holen, config.json und SSH-Sc
 ```
 
 Am Ende von `app` steht der Befehl für oi-o-mat mit dem öffentlichen Schlüssel der Website. Später gibt es diese Befehle:
-- `update <CTID>` holt den neuen Stand und baut neu.
+- `update <CTID>` holt den neuen Stand und das fertige Image dazu. Gebaut wird nicht im Container, sondern bei jedem Push auf `main` von GitHub Actions (`.github/workflows/image.yml`, erst die Tests, dann das Image nach `ghcr.io/marcel-b/3d-o-mat:sha-<commit>` und `:main`); `deploy/proxmox/start-image.sh` holt es und schreibt in `.env`, welches läuft. Das Update wartet bis 20 Minuten auf das Image. `BAUEN=1 bash /root/3d-o-mat-lxc.sh update <CTID>` baut wie früher im Container (braucht gut 10 GB Platz).
 - `pruefen <CTID>` zeigt den Zustand von Ablage, Schranke und Freigaben.
-- `autoupdate <CTID> [on|off|status|run]` schaltet das Auto-Update im Container (`app` schaltet es ein): ein systemd-Timer holt alle 5 Minuten `main` und baut neu, aber nur, wenn kein Auftrag wartet oder rechnet. Ein Stand, dessen Bau fehlschlug, wird erst mit dem nächsten Commit wieder versucht. Log: `pct exec <CTID> -- journalctl -u 3d-o-mat-update`.
+- `autoupdate <CTID> [on|off|status|run]` schaltet das Auto-Update im Container (`app` schaltet es ein): ein systemd-Timer holt alle 5 Minuten `main` und startet das Image dazu, aber nur, wenn kein Auftrag wartet oder rechnet. Ist das Image noch nicht gebaut, versucht es der nächste Lauf wieder; ein Stand, dessen Start fehlschlug, erst mit dem nächsten Commit. Log: `pct exec <CTID> -- journalctl -u 3d-o-mat-update`.
 - `schluessel <CTID>` zeigt den Schlüssel noch einmal.
 
 `--help` nennt die Variablen, zum Beispiel `IP=192.168.2.50/24 GATEWAY=192.168.2.1` für eine feste Adresse.

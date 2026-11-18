@@ -49,7 +49,8 @@ Aufruf: $AUFRUF [-y] [anlegen | app <CTID> | schluessel <CTID> | update <CTID> |
   app <CTID>        Schritt 2: 3d-o-mat holen, config.json und SSH-Schlüssel anlegen, bauen und starten;
                     am Ende steht der Befehl für oi-o-mat (install-store.sh --key …)
   schluessel <CTID> den öffentlichen Schlüssel der Website noch einmal zeigen
-  update <CTID>     git pull und neu bauen; config.json und Schlüssel bleiben
+  update <CTID>     git pull und das fertige Image dazu holen (GitHub Actions baut es; bis 20 min warten);
+                    config.json und Schlüssel bleiben. Mit BAUEN=1 wird hier gebaut wie früher
   autoupdate <CTID> [on|off|status|run]
                     Auto-Update im Container: alle 5 Minuten main holen und neu bauen, wenn kein Auftrag offen ist
                     (systemd-Timer 3d-o-mat-update; app schaltet es ein)
@@ -209,8 +210,8 @@ print(json.dumps(config, indent=2, ensure_ascii=False))' "$GATE_URL" "$OI_USER@$
         im_ct bash -c "install -d -m 700 '$APP_DIR/ssh' && ssh-keygen -q -t ed25519 -N '' -C 3d-o-mat-website -f '$APP_DIR/ssh/id_ed25519'"
         ok "SSH-Schlüssel der Website angelegt ($APP_DIR/ssh)"
     fi
-    info "Baue und starte (beim ersten Mal einige Minuten)"
-    im_ct bash -c "cd '$APP_DIR' && docker compose up -d --build --remove-orphans" >/dev/null
+    info "Hole das Image und starte (GitHub Actions baut es; BAUEN=1 baut hier)"
+    im_ct bash "$APP_DIR/deploy/proxmox/start-image.sh" --warten 20 $([[ ${BAUEN:-} == 1 ]] && echo --bauen) >/dev/null
     pruefen || true
     autoupdate on
     echo >&2
@@ -268,7 +269,8 @@ update() {
     im_ct git -C "$APP_DIR" fetch -q origin "$REPO_BRANCH"
     im_ct git -C "$APP_DIR" checkout -q -B "$REPO_BRANCH" FETCH_HEAD
     ok "Stand $(im_ct git -C "$APP_DIR" log -1 --format='%h %s') ($REPO_BRANCH)"
-    im_ct bash -c "cd '$APP_DIR' && docker compose up -d --build --remove-orphans && docker image prune -f" >/dev/null
+    info "Hole das Image zum Stand (GitHub Actions baut es nach jedem Push, wartet bis 20 min)"
+    im_ct bash "$APP_DIR/deploy/proxmox/start-image.sh" --warten 20 $([[ ${BAUEN:-} == 1 ]] && echo --bauen)
     pruefen
 }
 
