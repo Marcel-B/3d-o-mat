@@ -14,7 +14,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import assist, cutout
+from . import assist, cutout, mcp
 from .animate import AnimationError, add_animations
 from .config import Config
 from .fbx import TARGETS, FbxError, FbxUnavailable, convert, find_blender
@@ -542,6 +542,8 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
     models3d.add_routes(app)
     # Eine Figur aufbereiten (.blend -> saubere und kleine Figur), siehe figures.py
     figures.add_routes(app, caller)
+    # MCP für Agents unter /mcp, über dieselbe Schnittstelle: mcp.py
+    mcp.add_routes(app)
 
     if FRONTEND.is_dir():
         app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")
