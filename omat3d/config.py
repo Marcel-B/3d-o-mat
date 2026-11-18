@@ -25,6 +25,8 @@ class Config:
     assist_model: str = "gemma-4-26b-a4b-it-qat-mlx"
     # Skelett und Gewichte (SkinTokens, Rig-Dienst auf oi-o-mat, Server "rig" der Schranke).
     rig_model: str = "skintokens"
+    # Eine TRELLIS-Figur aufbereiten (figur_aufbereiten.py in Blender, Dienst auf oi-o-mat, Server "prep" der Schranke).
+    prep_model: str = "figur-aufbereiten"
     # Bilder malen (img-o-mat, Server "images" der Schranke); das erste ist die Vorgabe auf der Seite.
     paint_models: list = field(default_factory=lambda: ["klein-4b", "z-image-turbo", "krea-2-turbo"])
     # Was an /v1/3d/generations geht, wenn der Auftrag nichts anderes sagt.
@@ -56,7 +58,7 @@ class Config:
         angelegt wurde (die im Container bleibt bei update stehen)."""
         listed = list(self.gate.get("models") or [])
         named = {entry.get("model") for entry in listed}
-        for model in [self.trellis_model, self.assist_model, self.rig_model, *self.paint_models]:
+        for model in [self.trellis_model, self.assist_model, self.rig_model, self.prep_model, *self.paint_models]:
             if model not in named and model in GATE_MODELS:
                 listed.append({"model": model, **GATE_MODELS[model]})
                 named.add(model)
@@ -69,6 +71,7 @@ GATE_MODELS = {
     "gemma-4-26b-a4b-it-qat-mlx": {"source": "lmstudio-community/gemma-4-26b-a4b-it-qat-mlx", "context": 8192,
                                    "ramGb": 15, "sizeGb": 15.6},
     "skintokens": {"backend": "rig"},
+    "figur-aufbereiten": {"backend": "prep"},
     "klein-4b": {"backend": "images"},
     "z-image-turbo": {"backend": "images"},
     # Prüft jedes Bild mit dem Inhaltsfilter (img-o-mat, Lizenz §4.2) und braucht beim Malen etwa 22 GB.
@@ -79,7 +82,7 @@ GATE_MODELS = {
 
 _KEYS = {
     "listen": "listen", "port": "port", "store": "store", "gate": "gate",
-    "trellisModel": "trellis_model", "assistModel": "assist_model", "rigModel": "rig_model", "paintModels": "paint_models", "defaults": "defaults", "cutout": "cutout",
+    "trellisModel": "trellis_model", "assistModel": "assist_model", "rigModel": "rig_model", "prepModel": "prep_model", "paintModels": "paint_models", "defaults": "defaults", "cutout": "cutout",
     "rembgModel": "rembg_model", "requestTimeoutMinutes": "request_timeout_minutes",
     "onkelBummel": "onkel_bummel", "motionsDir": "motions_dir", "blender": "blender",
 }

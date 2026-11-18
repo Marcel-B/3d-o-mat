@@ -107,13 +107,33 @@ def frame(image: Image.Image, margin: float = 0.08) -> Image.Image:
     return canvas
 
 
-def cut(data: bytes, method: str = "auto", rembg_model: str = "birefnet-general") -> tuple[bytes, dict]:
-    """Gibt das PNG für TRELLIS.2 und eine Auskunft zurück: method, width, height, subject (Anteil des Objekts)."""
+METHODS = ("auto", "rembg", "flood", "head", "none")
+
+
+def head(image: Image.Image, rembg_model: str, tolerance: int = 40) -> Image.Image:
+    """Für Köpfe mit nacktem Hals auf schlichtem Grund: rembg und Fläche zusammen (das Mehr an Alpha zählt).
+    rembg allein schneidet Hals und Schultern als „kein Kopf“ ab, die Fläche allein läuft bei Haut, die so hell ist
+    wie der Grund, durch eine dünne Spur ins Gesicht; zusammen bleibt beides."""
+    a = np.asarray(flood(image, tolerance)).astype(np.float32)
+    if not rembg_available():
+        return Image.fromarray(a.astype(np.uint8), "RGBA")
+    b = np.asarray(with_rembg(image, rembg_model)).astype(np.float32)
+    alpha_a, alpha_b = a[..., 3:] / 255, b[..., 3:] / 255
+    take_b = alpha_b > alpha_a
+    rgb = np.where(take_b, b[..., :3], a[..., :3])
+    alpha = np.maximum(alpha_a, alpha_b) * 255
+    return Image.fromarray(np.dstack([rgb, alpha]).astype(np.uint8), "RGBA")
+
+
+def cut(data: bytes, method: str = "auto", rembg_model: str = "birefnet-general", tolerance: int = 40) -> tuple[bytes, dict]:
+    """Gibt das PNG für TRELLIS.2 und eine Auskunft zurück: method, width, height, subject (Anteil des Objekts).
+    method: auto (rembg, wenn da, sonst flood), rembg, flood (einfarbiger Grund, tolerance = Abstand zur Grundfarbe
+    in 0–255), head (rembg und flood zusammen, für Köpfe mit Hals) oder none."""
     with _cut_lock:
-        return _cut(data, method, rembg_model)
+        return _cut(data, method, rembg_model, tolerance)
 
 
-def _cut(data: bytes, method: str, rembg_model: str) -> tuple[bytes, dict]:
+def _cut(data: bytes, method: str, rembg_model: str, tolerance: int = 40) -> tuple[bytes, dict]:
     image = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
     image.load()
     if max(image.size) > MAX_INPUT:
@@ -122,14 +142,16 @@ def _cut(data: bytes, method: str, rembg_model: str) -> tuple[bytes, dict]:
         used, result = "alpha", image.convert("RGBA")
     elif method == "none":
         used, result = "none", image.convert("RGBA")
+    elif method == "head":
+        used, result = ("head" if rembg_available() else "flood"), head(image, rembg_model, tolerance)
     elif method == "rembg" or (method == "auto" and rembg_available()):
         used, result = "rembg", with_rembg(image, rembg_model)
     else:
-        used, result = "flood", flood(image)
+        used, result = "flood", flood(image, tolerance)
     subject = float((np.asarray(result)[:, :, 3] > 8).mean())
     note = None
     # Ein Objekt so hell wie sein Hintergrund flutet mit weg: dann lieber das Bild, wie es ist.
-    if used in ("flood", "rembg") and subject < 0.02:
+    if used in ("flood", "rembg", "head") and subject < 0.02:
         used, result, note = "none", image.convert("RGBA"), "Freistellen fand kein Objekt; das Bild geht unverändert an TRELLIS.2"
         subject = 1.0
     elif used == "flood" and subject > 0.97:

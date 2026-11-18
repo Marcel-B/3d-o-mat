@@ -1,0 +1,96 @@
+"""Setzt einen neuen Trellis-Kopf (GLB aus 3d-o-mat, Kopf mit Hals und Schultern) an die Stelle des Kopfes einer
+vorhandenen Eingabe-.blend (Koerper_ohne_Kopf + Kopf_langer_Hals) und schreibt eine neue Eingabe fuer
+figur_aufbereiten.py. Groesse aus Kinn-bis-Scheitel, Halsbreite und Schaedelbreite (Median der drei), Lage: Kinnhoehe
+und Schaedelmitte wie beim alten Kopf. Schultern: unterhalb des Kinns faellt weg, was ausserhalb der Halsellipse liegt.
+Laeuft mit Python und bpy 5.3 (wie figur_aufbereiten.py), Teil des Auftrags "Spielerfigur" (prep/server.py).
+Aufruf: python kopf_aufsetzen.py VORLAGE.blend KOPF.glb AUSGABE.blend [halsfaktor]"""
+import bpy, bmesh, sys, numpy as np
+from mathutils import Matrix, Vector
+
+vorlage, kopf_glb, ausgabe = sys.argv[1:4]
+halsfaktor = float(sys.argv[4]) if len(sys.argv) > 4 else 1.12
+
+def welt(o):
+    m = np.array(o.matrix_world)
+    co = np.array([v.co for v in o.data.vertices])
+    return co @ m[:3, :3].T + m[:3, 3]
+
+def slice_(co, z, dz):
+    return co[np.abs(co[:, 2] - z) < dz]
+
+def kennzahlen(co):
+    """Kinn (wo die Tiefe nach vorn springt, von unten gesucht oberhalb der schmalsten Halsstelle), Scheitel,
+    Halsbreite, Schaedelbreite und -mitte."""
+    z0, z1 = co[:, 2].min(), co[:, 2].max(); h = z1 - z0; dz = h * 0.006
+    zs = np.linspace(z0 + h * 0.02, z1 - h * 0.02, 200)
+    rows = []
+    for z in zs:
+        s = slice_(co, z, dz)
+        rows.append((z, np.ptp(s[:, 0]) if len(s) else 0, s[:, 1].min() if len(s) else 0))
+    rows = np.array(rows)
+    # Schaedel: groesste Breite in der oberen Haelfte
+    top = rows[rows[:, 0] > z0 + h * 0.5]
+    z_skull = top[np.argmax(top[:, 1]), 0]
+    # Kinn: im unteren Teil der Punkt, an dem ymin (Vorderkante) am weitesten nach vorn springt
+    low = rows[(rows[:, 0] < z_skull)]
+    jump = np.diff(low[:, 2])
+    i = int(np.argmin(jump))  # staerkster Sprung nach vorn (ymin kleiner)
+    z_chin = low[i + 1, 0]
+    neck = rows[(rows[:, 0] > z_chin - h * 0.12) & (rows[:, 0] < z_chin + h * 0.15) & (rows[:, 1] > 0)]
+    z_neck = neck[np.argmin(neck[:, 1]), 0]
+    s = slice_(co, (z_chin + z_skull) / 2 + (z_skull - z_chin) * 0.3, dz * 2)
+    centre = np.array([(s[:, 0].min() + s[:, 0].max()) / 2, (s[:, 1].min() + s[:, 1].max()) / 2])
+    return dict(z_chin=z_chin, z_top=z1, z_skull=z_skull, skull_w=top[:, 1].max(),
+                neck_w=neck[:, 1].min(), z_neck=z_neck, centre=centre)
+
+bpy.ops.wm.open_mainfile(filepath=vorlage, load_ui=False)
+alt = bpy.data.objects['Kopf_langer_Hals']
+ka = kennzahlen(welt(alt))
+alt_name = alt.name
+bpy.data.objects.remove(alt)
+bpy.ops.import_scene.gltf(filepath=kopf_glb)
+neu = [o for o in bpy.context.selected_objects if o.type == 'MESH'][0]
+for o in list(bpy.context.selected_objects):
+    if o is not neu and o.type != 'MESH':
+        bpy.data.objects.remove(o)
+neu.parent = None
+co = welt(neu)
+kn = kennzahlen(co)
+h = co[:, 2].max() - co[:, 2].min()
+z_neck = kn['z_neck']
+s = [(ka['z_top'] - ka['z_chin']) / (kn['z_top'] - kn['z_chin']), ka['neck_w'] / kn['neck_w'], ka['skull_w'] / kn['skull_w']]
+scale = float(np.median(s))
+print('alt', {k: (np.round(v, 4) if not isinstance(v, np.ndarray) else v.round(4)) for k, v in ka.items()})
+print('neu', {k: (np.round(v, 4) if not isinstance(v, np.ndarray) else v.round(4)) for k, v in kn.items()})
+print('Massstab je Mass', np.round(s, 4), '->', round(scale, 4))
+# Schultern weg: unterhalb des Kinns alles ausserhalb einer Ellipse um die Halsmitte
+ns = slice_(co, z_neck, h * 0.006)
+cx = (ns[:, 0].min() + ns[:, 0].max()) / 2
+rx = np.ptp(ns[:, 0]) / 2 * halsfaktor
+# Tiefe: von der Hinterkante des Halses aus, Hals etwa rund (vorn liegt auf dieser Hoehe schon der Kiefer)
+ry = rx
+cy = ns[:, 1].max() - np.ptp(ns[:, 0]) / 2
+m = np.array(neu.matrix_world)
+bm = bmesh.new(); bm.from_mesh(neu.data)
+weg = []
+for v in bm.verts:
+    p = m[:3, :3] @ np.array(v.co) + m[:3, 3]
+    if p[2] < kn['z_chin'] and ((p[0] - cx) / rx) ** 2 + ((p[1] - cy) / ry) ** 2 > 1:
+        weg.append(v)
+bmesh.ops.delete(bm, geom=weg, context='VERTS')
+bm.to_mesh(neu.data); bm.free()
+print('Punkte entfernt (Schultern)', len(weg))
+# skalieren und verschieben: Kinnhoehe und Schaedelmitte wie beim alten Kopf
+c_neu = np.array([kn['centre'][0], kn['centre'][1], kn['z_chin']])
+c_alt = np.array([ka['centre'][0], ka['centre'][1], ka['z_chin']])
+T = Matrix.Translation(Vector(c_alt)) @ Matrix.Scale(scale, 4) @ Matrix.Translation(Vector(-c_neu))
+neu.matrix_world = T @ neu.matrix_world
+bpy.context.view_layer.objects.active = neu
+for o in bpy.context.view_layer.objects: o.select_set(o is neu)
+bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+neu.name = alt_name; neu.data.name = alt_name
+bpy.ops.outliner.orphans_purge(do_recursive=True)
+for im in bpy.data.images:
+    if im.packed_file is None and im.size[0] > 0: im.pack()
+bpy.ops.wm.save_as_mainfile(filepath=ausgabe, compress=True)
+cn = welt(neu); print('neuer Kopf', cn.min(0).round(4), cn.max(0).round(4), len(neu.data.polygons), 'Flaechen')

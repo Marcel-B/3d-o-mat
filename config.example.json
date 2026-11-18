@@ -30,6 +30,10 @@
         "backend": "rig"
       },
       {
+        "model": "figur-aufbereiten",
+        "backend": "prep"
+      },
+      {
         "model": "klein-4b",
         "backend": "images"
       },
@@ -46,6 +50,7 @@
   "trellisModel": "ddalcu/TRELLIS.2-4B-MLX-Serve-8bit",
   "assistModel": "gemma-4-26b-a4b-it-qat-mlx",
   "rigModel": "skintokens",
+  "prepModel": "figur-aufbereiten",
   "paintModels": [
     "klein-4b",
     "z-image-turbo",

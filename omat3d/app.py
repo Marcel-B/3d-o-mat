@@ -21,7 +21,8 @@ from .fbx import TARGETS, FbxError, FbxUnavailable, convert, find_blender
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
 from .importer import ImportFailed, import_model
 from .jobs import OPEN, Jobs
-from .models3d import ApiError, Models3d, error as api_error
+from .figures import Figures
+from .models3d import ApiError, Models3d, caller, error as api_error
 from .motions import Library
 from .notify import Notifier
 from .paint import SIZES, Paintings
@@ -110,9 +111,9 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
     gate = gate or Gate(config.gate_url, config.app_name, config.request_timeout_minutes)
     notifier = Notifier(config.onkel_bummel, store, log)
 
-    def save_image(data: bytes, name: str, extra: dict, method: str | None = None) -> dict:
+    def save_image(data: bytes, name: str, extra: dict, method: str | None = None, tolerance: int = 40) -> dict:
         """Freistellen und mit dem Original auf die T7, für hochgeladene, gemalte und die Bilder der Schnittstelle."""
-        png, info = cutout.cut(data, method or config.cutout, config.rembg_model)
+        png, info = cutout.cut(data, method or config.cutout, config.rembg_model, tolerance)
         image_id = new_id()
         store.put("images", image_id, extra["original"], data)
         store.put("images", image_id, "cutout.png", png)
@@ -120,9 +121,11 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
         return store.write("images", doc)
 
     models3d = Models3d(config, store, save_image, log)
+    figures = Figures(config, store, models3d, log)
     jobs = Jobs(store, gate, config.trellis_model, config.defaults, log, rig_model=config.rig_model,
-                on_finish=notifier.job_finished, api=models3d)
+                on_finish=notifier.job_finished, api=models3d, prep_model=config.prep_model, figures=figures)
     models3d.jobs = jobs
+    figures.jobs = jobs
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -220,7 +223,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
                         "freeGb": storage.get("freeGb"), "error": storage.get("error")},
             "rembg": cutout.rembg_available(),
             "cutout": config.cutout,
-            "models": {"trellis": config.trellis_model, "assist": config.assist_model, "rig": config.rig_model,
+            "models": {"trellis": config.trellis_model, "assist": config.assist_model, "rig": config.rig_model, "prep": config.prep_model,
                        "paint": config.paint_models},
             "defaults": config.defaults,
             "gate": {
@@ -537,6 +540,8 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
 
     # --- Schnittstelle für andere Programme (Kaderwerk): /v1, siehe models3d.py
     models3d.add_routes(app)
+    # Eine Figur aufbereiten (.blend -> saubere und kleine Figur), siehe figures.py
+    figures.add_routes(app, caller)
 
     if FRONTEND.is_dir():
         app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")
