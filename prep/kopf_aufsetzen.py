@@ -1,6 +1,7 @@
 """Setzt einen neuen Trellis-Kopf (GLB aus 3d-o-mat, Kopf mit Hals und Schultern) an die Stelle des Kopfes einer
 vorhandenen Eingabe-.blend (Koerper_ohne_Kopf + Kopf_langer_Hals) und schreibt eine neue Eingabe fuer
-figur_aufbereiten.py. Groesse aus Kinn-bis-Scheitel, Halsbreite und Schaedelbreite (Median der drei), Lage: Kinnhoehe
+figur_aufbereiten.py. Groesse aus Kinn-bis-Scheitel, Halsbreite und Schaedelbreite (Median der drei), danach an die
+Gesichtsbreite des alten Kopfes angeglichen (Haare zaehlen dort nicht mit). Lage: Kinnhoehe
 und Schaedelmitte wie beim alten Kopf. Schultern: unterhalb des Kinns faellt weg, was ausserhalb der Halsellipse liegt.
 Laeuft mit Python und bpy 5.3 (wie figur_aufbereiten.py), Teil des Auftrags "Spielerfigur" (prep/server.py).
 Aufruf: python kopf_aufsetzen.py VORLAGE.blend KOPF.glb AUSGABE.blend [halsfaktor]"""
@@ -45,7 +46,8 @@ def kennzahlen(co):
 
 bpy.ops.wm.open_mainfile(filepath=vorlage, load_ui=False)
 alt = bpy.data.objects['Kopf_langer_Hals']
-ka = kennzahlen(welt(alt))
+co_alt = welt(alt)
+ka = kennzahlen(co_alt)
 alt_name = alt.name
 bpy.data.objects.remove(alt)
 bpy.ops.import_scene.gltf(filepath=kopf_glb)
@@ -59,10 +61,24 @@ kn = kennzahlen(co)
 h = co[:, 2].max() - co[:, 2].min()
 z_neck = kn['z_neck']
 s = [(ka['z_top'] - ka['z_chin']) / (kn['z_top'] - kn['z_chin']), ka['neck_w'] / kn['neck_w'], ka['skull_w'] / kn['skull_w']]
-scale = float(np.median(s))
+s0 = float(np.median(s))
+# Gesichtsbreite: Kinn bis Scheitel und Schaedelbreite haengen an den Haaren (flache Frisur = groesseres Gesicht bei
+# gleicher Hoehe). Darum zum Schluss die Breite zwischen 20 und 50 % der Kopfhoehe ueber dem Kinn (Kiefer bis
+# Schlaefen) an die des alten Kopfes angleichen, gemessen nach dem ersten Massstab.
+unit = ka['z_top'] - ka['z_chin']
+def breiten(c, z_chin, faktor):
+    out = []
+    for f in (0.2, 0.3, 0.4, 0.5):
+        sl = slice_(c, z_chin + f * unit / faktor, unit * 0.02 / faktor)
+        out.append(np.ptp(sl[:, 0]) * faktor if len(sl) else np.nan)
+    return np.array(out)
+b_alt, b_neu = breiten(co_alt, ka['z_chin'], 1.0), breiten(co, kn['z_chin'], s0)
+korrektur = float(np.nanmean(b_alt) / np.nanmean(b_neu))
+scale = s0 * korrektur
 print('alt', {k: (np.round(v, 4) if not isinstance(v, np.ndarray) else v.round(4)) for k, v in ka.items()})
 print('neu', {k: (np.round(v, 4) if not isinstance(v, np.ndarray) else v.round(4)) for k, v in kn.items()})
-print('Massstab je Mass', np.round(s, 4), '->', round(scale, 4))
+print('Massstab je Mass', np.round(s, 4), '->', round(s0, 4), '| Gesichtsbreite alt', np.round(b_alt, 4), 'neu', np.round(b_neu, 4),
+      '-> Korrektur', round(korrektur, 3), '-> Massstab', round(scale, 4))
 # Schultern weg: unterhalb des Kinns alles ausserhalb einer Ellipse um die Halsmitte
 ns = slice_(co, z_neck, h * 0.006)
 cx = (ns[:, 0].min() + ns[:, 0].max()) / 2
