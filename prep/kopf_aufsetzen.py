@@ -3,6 +3,7 @@ vorhandenen Eingabe-.blend (Koerper_ohne_Kopf + Kopf_langer_Hals) und schreibt e
 figur_aufbereiten.py. Groesse aus Kinn-bis-Scheitel, Halsbreite und Schaedelbreite (Median der drei), danach an die
 Gesichtsbreite des alten Kopfes angeglichen (Haare zaehlen dort nicht mit). Lage: Kinnhoehe
 und Schaedelmitte wie beim alten Kopf. Schultern: unterhalb des Kinns faellt weg, was ausserhalb der Halsellipse liegt.
+Hals: unterhalb des Kiefers Hoehe fuer Hoehe auf Breite und Tiefe des alten Halses gebracht (nur schmaler).
 Laeuft mit Python und bpy 5.3 (wie figur_aufbereiten.py), Teil des Auftrags "Spielerfigur" (prep/server.py).
 Aufruf: python kopf_aufsetzen.py VORLAGE.blend KOPF.glb AUSGABE.blend [halsfaktor]"""
 import bpy, bmesh, sys, numpy as np
@@ -104,6 +105,55 @@ neu.matrix_world = T @ neu.matrix_world
 bpy.context.view_layer.objects.active = neu
 for o in bpy.context.view_layer.objects: o.select_set(o is neu)
 bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+
+# Hals angleichen: Manche Scans haben einen Hals, der so breit wie der Kiefer gerade in den Kragen laeuft
+# (Kessler: 13 % breiter und tiefer als Klein). Der Kopf wirkt dann zu gross, obwohl das Gesicht passt. Unterhalb
+# des Kiefers wird der Hals darum quer und in der Tiefe auf die Masse des alten Halses gebracht (nur schmaler, nie
+# breiter), zum Kiefer hin weich auslaufend. Kiefer: wo der alte Kopf ueber dem Hals 20 % breiter als der Hals wird.
+def profil(c, zs, dz):
+    out = []
+    for z in zs:
+        sl = slice_(c, z, dz)
+        out.append((np.ptp(sl[:, 0]), np.ptp(sl[:, 1]), (sl[:, 0].min() + sl[:, 0].max()) / 2,
+                    (sl[:, 1].min() + sl[:, 1].max()) / 2) if len(sl) > 20 else (np.nan,) * 4)
+    return np.array(out)
+co_neu = welt(neu)
+dz = unit * 0.01
+z_lo = max(co_alt[:, 2].min(), co_neu[:, 2].min()) + dz * 2
+zs = np.arange(z_lo, ka['z_chin'] + unit * 0.5, dz)
+pa = profil(co_alt, zs, dz)
+w_hals = np.nanmin(pa[zs < ka['z_chin'] + unit * 0.2, 0])
+i_hals = int(np.nanargmin(np.where(zs < ka['z_chin'] + unit * 0.2, pa[:, 0], np.inf)))
+ueber = np.where((np.arange(len(zs)) > i_hals) & (pa[:, 0] > w_hals * 1.2))[0]
+if len(ueber):
+    z_kiefer = zs[ueber[0]]
+    band = zs < z_kiefer - dz
+    pn = profil(co_neu, zs[band], dz)
+    # Hoehe fuer Hoehe auf den alten Hals: oben am Kiefer schmal, unten im Kragen so breit wie der alte Hals,
+    # damit zwischen Hals und Kragen kein Spalt entsteht (ein fester Faktor liess unten den Kragenrand sehen).
+    zb = zs[band]
+    def glatt(r):
+        r = np.where(np.isfinite(r), r, np.nan)
+        ok = np.isfinite(r)
+        r = np.interp(zb, zb[ok], r[ok]) if ok.any() else np.ones_like(zb)
+        r = np.convolve(np.pad(r, 2, mode='edge'), np.ones(5) / 5, mode='valid')
+        return np.clip(r, 0.75, 1.0)
+    rxs, rys = glatt(pa[band, 0] / pn[:, 0]), glatt(pa[band, 1] / pn[:, 1])
+    cx, cy = np.nanmedian(pn[:, 2]), np.nanmedian(pn[:, 3])
+    blend = unit * 0.08
+    for v in neu.data.vertices:
+        z = v.co[2]
+        if z >= z_kiefer:
+            continue
+        rx = float(np.interp(z, zb, rxs)); ry = float(np.interp(z, zb, rys))
+        t = min(1.0, (z_kiefer - z) / blend); t = t * t * (3 - 2 * t)
+        v.co[0] = cx + (v.co[0] - cx) * (1 - t * (1 - rx))
+        v.co[1] = cy + (v.co[1] - cy) * (1 - t * (1 - ry))
+    neu.data.update()
+    print('Hals angeglichen: Kiefer bei', round(float(z_kiefer), 4), '| quer', np.round(rxs[::max(1, len(rxs) // 6)], 3),
+          'tief', np.round(rys[::max(1, len(rys) // 6)], 3), '(von unten nach oben)')
+else:
+    print('Hals angeglichen: Kiefer im alten Kopf nicht gefunden, Hals unveraendert')
 neu.name = alt_name; neu.data.name = alt_name
 bpy.ops.outliner.orphans_purge(do_recursive=True)
 for im in bpy.data.images:
