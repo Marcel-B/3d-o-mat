@@ -1,6 +1,7 @@
 import '@google/model-viewer';
 import { useState } from 'react';
-import { api, hasSkeleton, modelUrl, type Job } from '../api';
+import { api, hasSkeleton, modelUrl, save, type Job } from '../api';
+import { useFbx } from './FormatSelect';
 import { RigViewer } from '../rig/RigViewer';
 import { PrintPanel } from './PrintPanel';
 import { useT } from '../i18n';
@@ -35,6 +36,8 @@ export function Viewer({ job, jobs, scheme, onRigStarted }: Props) {
   const [kind, setKind] = useState('humanoid');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fbx = useFbx();
+  const [converting, setConverting] = useState<'unity' | 'unreal' | null>(null);
   // Schon ein Skelett für dieses Modell in Arbeit oder fertig? Dann zeigt der Knopf darauf, statt ein zweites zu starten.
   const existing = job && !rigged ? jobs.find(j => j.kind === 'rig' && j.sourceJobId === job.id && j.state !== 'failed' && j.state !== 'canceled') : undefined;
   // Derselbe Seed gibt dasselbe Skelett. Der Rig-Dienst probiert je Auftrag drei Seeds; ein neuer Versuch nach einem
@@ -54,6 +57,20 @@ export function Viewer({ job, jobs, scheme, onRigStarted }: Props) {
     }
   }
 
+  // Blender braucht einige Sekunden; solange steht „Wandelt um …“ auf dem Knopf.
+  async function downloadFbx(target: 'unity' | 'unreal') {
+    if (!job) return;
+    setConverting(target); setError(null);
+    try {
+      const { blob, name } = await api.modelFbx(job.id, target);
+      save(blob, name);
+    } catch (e) {
+      setError(t.fbxFailed((e as Error).message));
+    } finally {
+      setConverting(null);
+    }
+  }
+
   return (
     <div className="card viewer">
       <h2><span className="step">3</span> {rigged ? t.rigged : t.model}</h2>
@@ -70,6 +87,11 @@ export function Viewer({ job, jobs, scheme, onRigStarted }: Props) {
       {ready && (
         <div className="row">
           <a className="button primary" href={modelUrl(job.id, true)}>{rigged ? t.downloadRigged : t.download}</a>
+          {fbx && (['unity', 'unreal'] as const).map(target => (
+            <button key={target} type="button" onClick={() => downloadFbx(target)} disabled={converting !== null}>
+              {converting === target ? t.converting : t.fbx(target === 'unity' ? 'Unity' : 'Unreal')}
+            </button>
+          ))}
           <span className="muted small">
             {job.glbBytes ? size(job.glbBytes) : ''}{job.seconds !== null ? t.computed(seconds(job.seconds)) : ''}
             {job.import ? t.imported(job.import.format.toUpperCase(), job.import.triangles.toLocaleString(locale)) : ''}
