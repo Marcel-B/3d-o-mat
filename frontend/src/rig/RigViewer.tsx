@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { api } from '../api';
+import { api, save, type ExportFormat } from '../api';
+import { FormatSelect, short } from '../components/FormatSelect';
 import { POSES, RigStage, type Clip, type Facts, type PoseName } from './stage';
 import { PrintPanel } from '../components/PrintPanel';
 import { MotionLibrary } from './MotionLibrary';
@@ -35,6 +36,7 @@ export function RigViewer({ url, jobId, scheme, edited = 0 }: { url: string; job
   const [skeleton, setSkeleton] = useState(true);
   const [wire, setWire] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [format, setFormat] = useState<ExportFormat>('glb');
   const [exportError, setExportError] = useState<string | null>(null);
   // Zählt hoch, wenn eine Probe, Haltung oder Knochen von Hand die Aufnahme der Bibliothek ablöst.
   const [stopKey, setStopKey] = useState(0);
@@ -176,17 +178,13 @@ export function RigViewer({ url, jobId, scheme, edited = 0 }: { url: string; job
     }
   }
 
-  // Alle Proben mit der eingestellten Stärke als Animationen ins GLB, für Godot (AnimationPlayer) oder Blender.
+  // Alle Proben mit der eingestellten Stärke als Animationen ins GLB, für Godot (AnimationPlayer) oder Blender, oder als FBX.
   async function download() {
     if (!stage.current) return;
     setExporting(true); setExportError(null);
     try {
-      const { blob, name } = await api.animatedGlb(jobId, stage.current.bake(clips));
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = name;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+      const { blob, name } = await api.animated(jobId, stage.current.bake(clips), format);
+      save(blob, name);
     } catch (e) {
       setExportError(t.exportFailed((e as Error).message));
     } finally {
@@ -287,7 +285,8 @@ export function RigViewer({ url, jobId, scheme, edited = 0 }: { url: string; job
             </span>
           </div>
           <div className="row tight">
-            <button type="button" onClick={download} disabled={exporting}>{exporting ? t.packing : t.download}</button>
+            <FormatSelect id="rig-format" value={format} onChange={setFormat} />
+            <button type="button" onClick={download} disabled={exporting}>{exporting ? t.packing : t.download(short(format))}</button>
             <span className="small muted">{t.downloadHint}</span>
           </div>
           {exportError && <div className="error">{exportError}</div>}

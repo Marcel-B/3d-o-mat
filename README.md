@@ -1,10 +1,10 @@
 # 3d-o-mat
 
-Aus einem Bild ein 3D-Modell: Bild hochladen, freistellen lassen, optional von Gemma prüfen lassen, in 3D umwandeln, drehbar ansehen, als GLB oder als 3MF für den 3D-Drucker herunterladen; eine Figur lässt sich vorher in eine Haltung stellen. Ohne Bild schreibt Gemma aus einer Idee Bild-Prompts, und img-o-mat malt sie.
+Aus einem Bild ein 3D-Modell: Bild hochladen, freistellen lassen, optional von Gemma prüfen lassen, in 3D umwandeln, drehbar ansehen, als GLB, als FBX für Unity und Unreal oder als 3MF für den 3D-Drucker herunterladen; eine Figur lässt sich vorher in eine Haltung stellen. Ohne Bild schreibt Gemma aus einer Idee Bild-Prompts, und img-o-mat malt sie.
 
 | Teil | Wo | Was |
 | --- | --- | --- |
-| Website und API | Proxmox-LXC mit Docker | Python (FastAPI) mit React-Oberfläche, Port 8090; Freistellen mit rembg auf der CPU; hält keine Daten |
+| Website und API | Proxmox-LXC mit Docker | Python (FastAPI) mit React-Oberfläche, Port 8090; Freistellen mit rembg und FBX mit Blender auf der CPU; hält keine Daten |
 | Rechnen | oi-o-mat, nur über die [LLM-Schranke](https://github.com/Marcel-B/scripts/blob/main/docs/llm-gate.md) | TRELLIS.2 in MLX-Serve (Bild zu 3D), SkinTokens im Rig-Dienst (Skelett einsetzen), Gemma 4 26B in LM Studio (Prüfen, Prompts), img-o-mat mit FLUX.2 Klein 4B, Z-Image Turbo oder Krea 2 Turbo (Bilder malen) |
 | Dateien | T7 an oi-o-mat, `/Volumes/T7/3d-o-mat`, per SSH | Original, Freistellung, Aufträge, GLB |
 
@@ -55,6 +55,17 @@ Die App lädt und entlädt nie selbst ein Modell. Sie meldet sich bei der Schran
    **Skelett anpassen:** Sitzt ein Gelenk falsch (ein Knie zu tief, die Schultern zu eng), lässt es sich unter „Skelett anpassen“ verschieben: „Gelenke verschieben“ zeigt einen Marker je Knochen, ein Klick wählt ihn (oder die Liste), ein Griff zieht ihn im Raum; „Auf die andere Seite spiegeln“ überträgt die Lage auf das Gegenstück, „Verwerfen“ nimmt alles zurück. „Skelett speichern“ schickt die neuen Lagen an `POST /api/jobs/<id>/skeleton`; der Server setzt sie als `translation` der Knoten und rechnet die Bindematrizen des Skins neu (`omat3d/skeleton.py`), sodass das Netz in der Grundhaltung genau so bleibt und sich erst beim Bewegen an der neuen Stelle beugt. Die Gewichte bleiben die von SkinTokens; für kleine Korrekturen reicht das, bei großen Verschiebungen wandern Punkte mit dem falschen Knochen mit. Das Original liegt als `skeleton-original.glb` neben dem Modell, `skeletonEdited` im Auftrag zählt die Verschiebungen, und „Original-Skelett wiederherstellen“ (`POST …/skeleton/reset`) holt es zurück.
 
    **Haltung:** Im Viewer mit Skelett gibt es unter „Haltung“ fertige Haltungen (Arme runter, Lässig stehen, Heldenpose, Schritt, Winken, Arm hoch). Oder man beschreibt eine, etwa „steht lässig, rechte Hand winkt“, und Gemma setzt Winkel für 16 Mixamo-Knochen (`/api/pose`); einen Oberarm gibt Gemma als Richtung an (wie hoch, wohin). Hat das Skelett Fingerknochen, gibt es dazu „Faust links“ und „Faust rechts“ als Schieber, und Gemma kann sie ebenfalls schließen, etwa bei „rechte Faust zum Himmel“. Die Heldenpose ballt beide Fäuste. Danach lässt sich jeder Knochen mit den Schiebern nachstellen; die Schieber drehen von der gewählten Haltung aus und merken sich ihre Werte je Knochen. Die Füße bleiben auf dem Gitter. Starke Winkel (Ellbogen, Knie über etwa 100°) knicken das Netz sichtbar, ruhige Haltungen mit Armen nah am Körper drucken sich am besten.
+
+## FBX für Unity und Unreal
+
+Unter jedem fertigen Modell stehen neben „GLB herunterladen“ die Knöpfe „FBX für Unity“ und „FBX für Unreal“. Bei den Proben und der Auswahl aus der Bibliothek wählt ein Feld vor dem Knopf das Format: GLB (Godot, Blender) oder FBX für Unity bzw. Unreal. Die Knöpfe erscheinen nur, wenn der Container Blender hat (`/api/status` meldet `fbx`).
+
+- **Wie:** Erst entsteht dasselbe GLB wie beim GLB-Knopf (mit den angehängten Animationen), dann wandelt Blender es um (`omat3d/fbx.py` startet `blender -b … --python omat3d/blender_fbx.py`). Blender läuft als eigener Prozess und teilt sich das Schloss mit der Druckdatei, damit nie beides auf einmal rechnet. Eine Figur mit 490.000 Punkten braucht 5 bis 10 Sekunden und knapp 1 GB Speicher.
+- **Was ankommt:** Netz, UV, die Grundfarbe-Textur (eingebettet), alle Knochen mit ihren Mixamo-Namen (ohne zusätzliche Endknochen, damit Unitys Humanoid-Avatar sie zuordnet), die Gewichte und jede Animation als eigener Take mit 30 Bildern je Sekunde. In Unity heißen die Clips `Armature|Gehen` usw., in Unreal wird jeder eine Animation Sequence. FBX kennt kein PBR: Metallic und Roughness gehen verloren, im Spiel setzt man ohnehin ein eigenes Material.
+- **Maßstab und Achsen:** Y oben, Gesicht nach −Z. „Unity“ schreibt Meter, die Figur kommt mit Maßstab 1 an; „Unreal“ schreibt Zentimeter, und das Armature-Objekt heißt `Armature`, damit Unreal keinen zusätzlichen Wurzelknochen anlegt. Root Motion: Die Hüfte bewegt sich wie im GLB; Unity rechnet beim Humanoid Root Motion daraus. Den Schalter „Root Motion (Godot)“ braucht es für FBX nicht.
+- **Schnittstelle:** `GET /api/jobs/<id>/model.fbx?target=unity|unreal` für jedes fertige Modell (mit oder ohne Skelett), `POST /api/jobs/<id>/animated.fbx?target=…` mit denselben `clips` wie `animated.glb`. Der Header `x-fbx-info` nennt Knochen, Takes mit Bildern und die Dauer. Ohne Blender antworten beide mit 503, scheitert Blender, mit 502 und Blenders Meldung.
+- **Warum Blender:** Geprüft wurden auch assimp (Animationen tausendfach zu lang, Netz in Punkte, Linien und Dreiecke zerlegt), das Autodesk FBX SDK (eigene Lizenz, darf nicht einfach ins Image), JavaScript (three.js liest FBX, schreibt es aber nicht) und ein eigener Schreiber (viel Arbeit, prüfen ließe er sich nur in Unity und Unreal selbst). Blenders FBX-Exporter ist der, mit dem die meisten Figuren aus freier Software in Unity und Unreal landen.
+- **Blender:** im Image die offizielle LTS-Fassung unter `/opt/blender` (`BLENDER` im Dockerfile), sonst über `blender` in der `config.json`.
 
 ## Eigene Figur importieren
 
@@ -198,6 +209,7 @@ Das Skript erledigt:
 - Das gebaute `skintokens`-Programm ist GPL-3.0, weil sein Teil zum Einlesen der Form aus Michelangelo stammt. 3d-o-mat ruft es nur als eigenes Programm auf und bleibt MIT.
 - Die erzeugten Skelette und Gewichte sind Ausgaben des Modells und kein GPL-Code.
 - Für die Druckdatei nutzt die Website manifold3d (Apache-2.0) und scikit-image (BSD-3-Clause).
+- Für FBX liegt Blender (GPL-2.0 oder neuer) im Image. 3d-o-mat startet es als eigenes Programm und gibt ihm nur Dateien, importiert also nichts davon und bleibt MIT; `omat3d/blender_fbx.py` läuft in Blender selbst. Wer das Image weitergibt, gibt Blender mit seiner Lizenz weiter.
 - Die Bewegungsbibliothek bringt keine Daten ins Repo; sie wird beim Bau geholt. CMU: frei, auch kommerziell, nicht weiterverkaufen (mocap.cs.cmu.edu, gefördert von NSF EIA-0196217). Bandai Namco Research Motiondataset: CC BY-NC 4.0.
 
 Gemessen auf oi-o-mat (M6, 32 GB) mit einer TRELLIS-Figur (226.000 Punkte): 34,5 s, höchstens 8,3 GB.
@@ -235,6 +247,7 @@ Im Container holt der Bau des Images die Bewegungsbibliothek (`/app/motions-data
 | `cutout` | `auto`, `rembg`, `flood` oder `none` |
 | `onkelBummel` | Nachricht an [Onkel Bummel](https://github.com/Marcel-B/onkel-bummel), wenn ein 3D-Modell oder Skelett fertig ist oder fehlschlägt, mit dem freigestellten Bild: `{"url": "https://onkel-bummel.<tailnet>.ts.net", "token": "ob_…", "topic": "3d-o-mat", "click": "http://3d-o-mat:8090/"}`. Den Token (Publish-Token für das Topic) legst du in Onkel Bummel unter Verwaltung → Publish-Tokens an; statt `token` geht `tokenFile`. Ohne `url` kommt keine Nachricht. Gemalte Bilder meldet img-o-mat selbst |
 | `motionsDir` | wo die Bewegungsbibliothek liegt; Vorgabe `motions-data` neben `omat3d`, im Image `/app/motions-data` |
+| `blender` | Blender für den FBX-Export: ein Name im `PATH` oder ein Pfad. Vorgabe `blender`, im Image `/usr/local/bin/blender`; auf einem Mac etwa `/Applications/Blender.app/Contents/MacOS/Blender`. Leer schaltet FBX ab |
 | `rembgModel` | Vorgabe `isnet-general-use`: auf einem 12-MP-Foto 9 s und 1,5 GB RAM. `birefnet-general` stellt etwas feiner frei, braucht aber 115 s und 9,5 GB, mehr als der Container hat |
 
 ## Entwickeln
@@ -245,11 +258,11 @@ Im Container holt der Bau des Images die Bewegungsbibliothek (`/app/motions-data
 cd frontend && npm run dev
 ```
 
-`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, Haltung von Gemma, Druckdatei, unzulässige Pfade. `tests/test_models3d.py` spielt die Schnittstelle unter `/v1` mit einem nachgestellten TRELLIS.2 durch: hochladen, Auftrag, Stand, GLB holen und prüfen (ein Mesh, Ursprung am Hals, Texturen, `extras`), Fehler bei falschem SHA-256 und unzulässigen Werten, Abbrechen und Neustart. `tests/test_importer.py` importiert OBJ mit Material und Textur, glTF mit Dateien daneben und als ZIP, GLB mit Mixamo- und fremdem Skelett, und lehnt ab, was keine Figur wird. `tests/test_motions.py` prüft das Holen und Umrechnen der Bibliothek (mit nachgestellten Downloads) und ihre Schnittstelle. `tests/test_printout.py` backt die Haltung eines kleinen GLB mit zwei Knochen ein und prüft auf beiden Wegen, dass die Druckdatei wasserdicht ist. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
+`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, Haltung von Gemma, Druckdatei, unzulässige Pfade. `tests/test_models3d.py` spielt die Schnittstelle unter `/v1` mit einem nachgestellten TRELLIS.2 durch: hochladen, Auftrag, Stand, GLB holen und prüfen (ein Mesh, Ursprung am Hals, Texturen, `extras`), Fehler bei falschem SHA-256 und unzulässigen Werten, Abbrechen und Neustart. `tests/test_importer.py` importiert OBJ mit Material und Textur, glTF mit Dateien daneben und als ZIP, GLB mit Mixamo- und fremdem Skelett, und lehnt ab, was keine Figur wird. `tests/test_motions.py` prüft das Holen und Umrechnen der Bibliothek (mit nachgestellten Downloads) und ihre Schnittstelle. `tests/test_printout.py` backt die Haltung eines kleinen GLB mit zwei Knochen ein und prüft auf beiden Wegen, dass die Druckdatei wasserdicht ist. `tests/test_fbx.py` prüft den Aufruf von Blender mit `tests/fake/blender` und die Wege unter `/api`; ist ein echtes Blender da (`OMAT3D_TEST_BLENDER=/pfad/zu/blender` oder `blender` im `PATH`), wandelt es eine kleine Figur mit einer Animation um, liest das FBX mit Blender wieder und prüft Knochen, Gewichte, Take, Länge und Größe. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
 
 ## Später
 
-- Import: FBX (über Blender oder assimp im Container) und eine Zuordnung für Skelette mit anderen Namen (Rigify, Unreal), damit auch die gleich in die Bibliothek können.
+- Import: FBX (über das Blender, das für den FBX-Export schon im Image liegt) und eine Zuordnung für Skelette mit anderen Namen (Rigify, Unreal), damit auch die gleich in die Bibliothek können.
 
 - Schnittstelle: den UV-Atlas neu packen (etwa mit xatlas) und die Texturen darauf umbacken, damit das Gesicht eine große zusammenhängende Insel bekommt.
 - Pixal3D für mehrere Ansichten desselben Objekts (MLX-Serve kann es, `images` statt `image`).
