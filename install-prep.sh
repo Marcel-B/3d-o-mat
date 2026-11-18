@@ -38,7 +38,7 @@ mkdir -p "$HOME_DIR" "$ROOT/prep"
 "$HOME_DIR/venv/bin/pip" install -q "bpy==5.3.*" numpy scipy scikit-image
 "$HOME_DIR/venv/bin/python" -c 'import bpy, scipy, skimage; print("bpy", bpy.app.version_string)'
 
-cp "$HERE/prep/server.py" "$HERE/prep/figur_aufbereiten.py" "$HERE/prep/kopf_aufsetzen.py" "$HERE/prep/rig_uebertragen.py" "$ROOT/prep/"
+cp "$HERE/prep/server.py" "$HERE/prep/figur_aufbereiten.py" "$HERE/prep/kopf_aufsetzen.py" "$HERE/prep/rig_uebertragen.py" "$HERE/prep/finger_trennen.py" "$ROOT/prep/"
 /usr/bin/python3 -c 'import json, sys; json.dump({"python": sys.argv[1], "port": int(sys.argv[2]), "memoryGb": float(sys.argv[3])}, open(sys.argv[4], "w"), indent=2)' \
   "$HOME_DIR/venv/bin/python" "$PORT" "$MEMORY" "$ROOT/prep.json"
 echo "Aufbereitung: $ROOT/prep/server.py, Port $PORT, Python $HOME_DIR/venv/bin/python"

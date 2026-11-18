@@ -652,12 +652,26 @@ def build_small_head(src, sauber, hd, target, voxel_div, rep):
         skin = hd['skin'][vis][idx] & (dist < 0.017 * D)
         share = area[skin].sum() / area.sum()
         if 0.05 < share < 0.8:
-            prot = skin.copy()
+            # Hoehe im Kopf (lokale Achse zur Welt-Z): der lange Hals unter dem Kinn steckt spaeter im Kragen und
+            # soll das Budget des geschuetzten Teils nicht aufbrauchen.
+            up = np.array(src.matrix_world.inverted().to_3x3() @ Vector((0, 0, 1)))
+            up /= np.linalg.norm(up)
+            hz = cen @ up
+            face_band = hz > hz.min() + 0.3 * (hz.max() - hz.min())
+            prot = skin & face_band
             mode = 'Haut geschuetzt'
             s = (area[skin, None] * nor[skin]).sum(0)
             if np.linalg.norm(s) / area[skin].sum() > 0.1:   # Blickrichtung des Gesichts aus den Hautflaechen
                 f = s / np.linalg.norm(s)
-                front = skin & (nor @ f > 0.5)
+                rep['kopf_blickrichtung'] = 'aus der Haut'
+            else:
+                # Haut rundum (langer Hals, kurze Haare, Kopfhaut zwischen Straehnen) hebt sich auf. Die Eingabe ist
+                # wie die Trellis-Figur ausgerichtet: das Gesicht schaut in der Welt nach -Y.
+                f = np.array(src.matrix_world.inverted().to_3x3() @ Vector((0, -1, 0)))
+                f /= np.linalg.norm(f)
+                rep['kopf_blickrichtung'] = 'nach vorn (-Y)'
+            front = skin & (nor @ f > 0.5) & face_band
+            if area[front].sum() > 0:
                 c = (area[front, None] * cen[front]).sum(0) / area[front].sum()
                 r = math.sqrt(area[front].sum() / math.pi)
                 d = cen - c

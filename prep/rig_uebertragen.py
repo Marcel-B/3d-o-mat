@@ -69,6 +69,11 @@ for g in dst.vertex_groups:
     for i in np.where(col > 1e-4)[0]:
         g.add([int(i)], float(col[i]), 'REPLACE')
 print('Kopfpunkte fern der Vorlage -> Head', fern, 'von', len(cd))
+# Zusammengewachsene Fingerspitzen trennen (Splitter zwischen den Fingern, finger_trennen.py daneben)
+import os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+import finger_trennen
+finger_trennen.trennen(dst)
 bpy.data.objects.remove(src)
 dst.name = 'Figur'; dst.parent = arm; dst.matrix_parent_inverse = arm.matrix_world.inverted()
 mod = dst.modifiers.new('Armature', 'ARMATURE'); mod.object = arm
