@@ -73,7 +73,12 @@ export type Status = {
     models: Record<string, { state: string; approved: boolean; backend?: string }>;
   };
   paint: { models: { id: string; state: string | null; approved: boolean }[]; sizes: string[] };
+  // Blender im Container, also FBX für Unity und Unreal möglich (omat3d/fbx.py).
+  fbx?: boolean;
 };
+
+// GLB wie bisher oder FBX, für Unity (Meter) oder Unreal (Zentimeter).
+export type ExportFormat = 'glb' | 'unity' | 'unreal';
 
 export type Painting = {
   id: string;
@@ -138,17 +143,12 @@ export const api = {
   // Die Proben als Animationen im GLB; zurück kommt die Datei.
   motions: () => fetch('/api/motions').then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() as Promise<MotionIndex>; }),
   motionBvh: (id: string) => fetch(`/api/motions/${id}.bvh`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); }),
-  animatedGlb: async (id: string, clips: unknown[]) => {
-    const response = await fetch(`/api/jobs/${id}/animated.glb`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ clips }),
-    });
-    if (!response.ok) {
-      const json = await response.json().catch(() => ({}));
-      throw new Error(typeof json.detail === 'string' ? json.detail : `HTTP ${response.status}`);
-    }
-    const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? `${id}-proben.glb`;
-    return { blob: await response.blob(), name };
-  },
+  // Animationen an die Figur gehängt, als GLB oder von Blender als FBX umgewandelt; zurück kommt die Datei.
+  animated: (id: string, clips: unknown[], format: ExportFormat = 'glb') =>
+    file(format === 'glb' ? `/api/jobs/${id}/animated.glb` : `/api/jobs/${id}/animated.fbx?target=${format}`,
+      `${id}-animiert.${format === 'glb' ? 'glb' : 'fbx'}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ clips }) }),
+  // Das Modell als FBX, ohne Animationen.
+  modelFbx: (id: string, target: 'unity' | 'unreal') => file(`/api/jobs/${id}/model.fbx?target=${target}`, `${id}-${target}.fbx`),
   // Gelenke des Skeletts verschieben (Knoten -> neue Lage) und das Original wiederherstellen.
   moveJoints: (id: string, moves: Record<string, [number, number, number]>) =>
     call<{ moved: number; skeletonEdited: number }>('POST', `/api/jobs/${id}/skeleton`, { moves }),
@@ -172,6 +172,31 @@ export const api = {
 };
 
 // Wie omat3d/app.py has_skeleton: ein Skelett von SkinTokens oder ein importiertes mit Mixamo-Namen.
+// Eine Datei holen und ihren Namen aus content-disposition lesen; Fehler mit der Meldung des Servers.
+async function file(url: string, fallback: string, init?: RequestInit) {
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    const json = await response.json().catch(() => ({}));
+    throw new Error(typeof json.detail === 'string' ? json.detail : `HTTP ${response.status}`);
+  }
+  const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? fallback;
+  return { blob: await response.blob(), name };
+}
+
+// Eine Datei aus dem Speicher herunterladen.
+export function save(blob: Blob, name: string) {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+}
+
+// Ob es FBX gibt, fragt die Seite einmal; ändert sich nur mit einem neuen Image.
+let fbxCheck: Promise<boolean> | null = null;
+export const fbxAvailable = () =>
+  (fbxCheck ??= api.status().then(s => !!s.fbx).catch(() => { fbxCheck = null; return false; }));
+
 export const hasSkeleton = (job: Job | null | undefined) =>
   job?.kind === 'rig' || (job?.kind === 'import' && job.import?.skeleton === 'mixamo');
 

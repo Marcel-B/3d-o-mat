@@ -60,6 +60,8 @@ Dann in `config.json` (sie steht in `.gitignore` und bleibt nur lokal) anpassen:
 - **Weg A:** `"store": {"folder": "/Users/<du>/3d-o-mat-daten"}`. Ein absoluter Pfad ist am sichersten; `~` wird nicht aufgelöst. `gate.url` bleibt `http://192.168.2.122:1235`.
 - **Weg B:** `store` bleibt `{"folder": "/Volumes/T7/3d-o-mat"}`, `gate.url` wird `http://127.0.0.1:1235`.
 
+- **FBX (optional):** Blender installieren (`brew install --cask blender` oder von blender.org) und `"blender": "/Applications/Blender.app/Contents/MacOS/Blender"` setzen. Ohne Blender fehlen nur die FBX-Knöpfe.
+
 Mit `folder` startet die Website `store/launch.py` selbst, ohne SSH. Die übrigen Felder stehen in der Tabelle im README. Eine andere Datei nimmt die App über `OMAT3D_CONFIG=/pfad/zur/config.json`.
 
 ## 5. Starten

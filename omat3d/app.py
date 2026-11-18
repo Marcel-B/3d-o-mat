@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from . import assist, cutout
 from .animate import AnimationError, add_animations
 from .config import Config
+from .fbx import TARGETS, FbxError, FbxUnavailable, convert, find_blender
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
 from .importer import ImportFailed, import_model
 from .jobs import OPEN, Jobs
@@ -143,6 +144,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
     app.state.models3d = models3d
     app.state.notifier = notifier
     app.state.store = store
+    app.state.config = config
     library = Library(config.motions_dir)
 
     def answer(request: Request, status: int, message: str) -> JSONResponse:
@@ -232,6 +234,7 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
                 "held": (mine or {}).get("held"),
                 "models": models,
             },
+            "fbx": find_blender(config.blender) is not None,
             "paint": {"models": [{"id": model, **models.get(model, {"state": None, "approved": False})}
                                  for model in config.paint_models], "sizes": list(SIZES)},
         }
@@ -474,6 +477,45 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
             "content-disposition": f'attachment; filename="{name}-druck-{job_id}.{request.format}"',
             "x-print-info": json.dumps(info),
         })
+
+    # --- FBX für Unity und Unreal (fbx.py): dasselbe GLB wie oben, von Blender umgewandelt. Blender braucht bis knapp
+    # 1 GB; es teilt sich das Schloss mit der Druckdatei, damit nie beides auf einmal läuft.
+
+    def fbx_response(glb: bytes, target: str, filename: str) -> Response:
+        if target not in TARGETS:
+            raise HTTPException(422, f"target muss {' oder '.join(TARGETS)} sein")
+        with printing:
+            try:
+                data, info = convert(glb, target, find_blender(config.blender))
+            except FbxUnavailable as error:
+                raise HTTPException(503, str(error)) from error
+            except FbxError as error:
+                raise HTTPException(502, str(error)) from error
+        return Response(data, media_type="application/octet-stream", headers={
+            "content-disposition": f'attachment; filename="{filename}"', "x-fbx-info": json.dumps(info)})
+
+    @app.get("/api/jobs/{job_id}/model.fbx")
+    def model_fbx(job_id: str, target: str = "unity"):
+        doc = job(job_id)
+        if doc["state"] != "done":
+            raise HTTPException(404, "Noch kein Modell")
+        name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
+        suffix = "-skelett" if has_skeleton(doc) else ""
+        return fbx_response(model_glb(doc), target, f"{name}{suffix}-{target}-{job_id}.fbx")
+
+    @app.post("/api/jobs/{job_id}/animated.fbx")
+    def animated_fbx(job_id: str, request: AnimatedRequest, target: str = "unity"):
+        doc = job(job_id)
+        if not has_skeleton(doc) or doc["state"] != "done":
+            raise HTTPException(409, "Nur ein fertiges Modell mit Skelett bekommt Animationen")
+        if target not in TARGETS:
+            raise HTTPException(422, f"target muss {' oder '.join(TARGETS)} sein")
+        try:
+            glb = add_animations(model_glb(doc), request.clips)
+        except AnimationError as error:
+            raise HTTPException(422, str(error)) from error
+        name = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.get("imageName") or "modell").strip("-") or "modell"
+        return fbx_response(glb, target, f"{name}-animiert-{target}-{job_id}.fbx")
 
     # --- Bewegungsbibliothek (motions.py): Liste und die Aufnahmen als BVH, übertragen wird auf der Seite
 

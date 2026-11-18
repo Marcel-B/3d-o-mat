@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type MotionClip, type MotionIndex } from '../api';
+import { api, save, type ExportFormat, type MotionClip, type MotionIndex } from '../api';
+import { FormatSelect, short } from '../components/FormatSelect';
 import { useLang } from '../i18n';
 import { DEFAULT_OPTIONS, Motion, type MotionOptions } from './retarget';
 import type { MotionTake, RigStage } from './stage';
@@ -29,6 +30,7 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
   const [loadingClip, setLoadingClip] = useState(false);
   const [takes, setTakes] = useState<Take[]>([]);
   const [exporting, setExporting] = useState(false);
+  const [format, setFormat] = useState<ExportFormat>('glb');
   const [exportError, setExportError] = useState<string | null>(null);
   // Geladene Aufnahmen, damit Vorschau und Export sie nicht jedes Mal neu holen und einlesen.
   const cache = useRef(new Map<string, Motion>());
@@ -129,12 +131,8 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
           extras: { source: src?.name ?? clip.source, recording: clip.ref, license: src?.licenseEn ?? '', credit: src?.credit ?? '' },
         });
       }
-      const { blob, name: file } = await api.animatedGlb(jobId, s.bakeMotions(list, { rootMotion }));
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = file;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+      const { blob, name: file } = await api.animated(jobId, s.bakeMotions(list, { rootMotion }), format);
+      save(blob, file);
     } catch (e) {
       setExportError(rig.exportFailed((e as Error).message));
     } finally {
@@ -239,7 +237,8 @@ export function MotionLibrary({ stage, jobId, stopKey, onPlay }: {
             {stage()?.canRootMotion && (
               <label className="small check" title={t.rootMotionHint}><input id="motion-root" type="checkbox" checked={rootMotion} onChange={e => setRootMotion(e.target.checked)} /> {t.rootMotion}</label>
             )}
-            <button type="button" className="primary" onClick={download} disabled={exporting}>{exporting ? t.packing : t.download(takes.length)}</button>
+            <FormatSelect id="motion-format" value={format} onChange={setFormat} />
+            <button type="button" className="primary" onClick={download} disabled={exporting}>{exporting ? t.packing : t.download(takes.length, short(format))}</button>
           </div>
           {takes.some(k => nonCommercial(k.clip)) && <div className="small warn">{t.ncWarning}</div>}
           <div className="small muted">{t.credit(usedSources.join(', '))}</div>
