@@ -119,7 +119,7 @@ def test_wrong_calls_are_tool_errors(client):
 
 def test_picture_to_model_to_print(client):
     status = ok(client, "get_status")
-    assert status["storage"]["mounted"] and status["queue"]["waiting"] == 0 and status["fbx"] is None
+    assert status["storage"]["mounted"] and status["queue"]["waiting"] == 0
     image = ok(client, "upload_image", data_base64=base64.b64encode(disc_on_white()).decode(), filename="scheibe.png")
     assert image["name"] == "scheibe" and image["cutout"]["method"] == "flood"
     assert [i["id"] for i in ok(client, "list_images")] == [image["id"]]
@@ -143,7 +143,6 @@ def test_picture_to_model_to_print(client):
     assert data.status_code == 200 and data.content[:2] == b"PK" and len(data.content) == printed["bytes"]
     assert "attachment" in data.headers["content-disposition"]
     assert client.get(printed["url"].removeprefix(BASE) + "x").status_code == 404
-    assert "noch kein FBX" in failed(client, "export_model", job_id=job["id"], format="fbx")
     assert "wartende" in failed(client, "cancel_job", job_id=job["id"])
     rig = ok(client, "add_skeleton", job_id=job["id"], kind="humanoid")
     assert rig["kind"] == "rig" and rig["sourceJobId"] == job["id"] and rig["state"] == "queued"
@@ -168,17 +167,29 @@ def test_painting(client):
 
 
 def test_fbx_comes_with_its_route(client):
-    """Sobald 3d-o-mat GET /api/jobs/<id>/model.fbx hat, bietet export_model FBX an; status.fbx sagt, ob Blender da ist."""
-    app = client.app
+    """FBX gibt es erst mit der Route GET /api/jobs/<id>/model.fbx, und nur, wenn /api/status nicht "fbx": false
+    meldet (Blender fehlt)."""
+    server = client.app.state.mcp
     image = ok(client, "upload_image", data_base64=base64.b64encode(disc_on_white()).decode())
     job = wait(client, ok(client, "create_model", image_id=image["id"], texture_size=1024)["id"])
 
-    @app.get("/api/jobs/{job_id}/model.fbx")
-    def fbx(job_id: str, target: str = "unity"):
-        return httpx.Response(200).content
-    # Die Route muss vor dem Mount der Oberfläche stehen; im Test gibt es keine, also reicht hinten anhängen.
+    server.has_route = lambda path: False
+    assert ok(client, "get_status")["fbx"] is None and "fbx_unity" not in ok(client, "get_job", job_id=job["id"])["downloads"]
+    assert "noch kein FBX" in failed(client, "export_model", job_id=job["id"], format="fbx")
+
+    server.has_route = lambda path: True
+    answers = {}
+    real = server.call
+
+    async def call(method, path, **kwargs):
+        if path == "/api/status":
+            return {**await real(method, path, **kwargs), **answers}
+        return await real(method, path, **kwargs)
+    server.call = call
+    answers["fbx"] = False
+    assert "Blender" in failed(client, "export_model", job_id=job["id"], format="fbx")
+    answers["fbx"] = True
     job = ok(client, "get_job", job_id=job["id"])
     assert job["downloads"]["fbx_unreal"] == f"{BASE}/api/jobs/{job['id']}/model.fbx?target=unreal"
     exported = ok(client, "export_model", job_id=job["id"], format="fbx", target="unreal")
-    assert exported["url"].endswith("target=unreal")
-    assert ok(client, "get_status")["fbx"] is True
+    assert exported["url"].endswith("target=unreal") and ok(client, "get_status")["fbx"] is True
