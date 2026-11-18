@@ -38,6 +38,9 @@ class Config:
     onkel_bummel: dict = field(default_factory=dict)
     # Die Bewegungsbibliothek (python -m omat3d.motions fetch <ordner>); im Docker-Image /app/motions-data.
     motions_dir: str = str(Path(__file__).resolve().parent.parent / "motions-data")
+    # Blender für den FBX-Export (fbx.py): ein Name im PATH oder ein Pfad; im Docker-Image /usr/local/bin/blender.
+    # Auf einem Mac etwa "/Applications/Blender.app/Contents/MacOS/Blender". Leer schaltet FBX ab.
+    blender: str = "blender"
 
     @property
     def gate_url(self) -> str:
@@ -78,7 +81,7 @@ _KEYS = {
     "listen": "listen", "port": "port", "store": "store", "gate": "gate",
     "trellisModel": "trellis_model", "assistModel": "assist_model", "rigModel": "rig_model", "paintModels": "paint_models", "defaults": "defaults", "cutout": "cutout",
     "rembgModel": "rembg_model", "requestTimeoutMinutes": "request_timeout_minutes",
-    "onkelBummel": "onkel_bummel", "motionsDir": "motions_dir",
+    "onkelBummel": "onkel_bummel", "motionsDir": "motions_dir", "blender": "blender",
 }
 
 

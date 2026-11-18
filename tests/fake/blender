@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Stands in for Blender: `blender -b --factory-startup --python-exit-code 3 --python SCRIPT -- IN OUT TARGET REPORT`,
+as omat3d/fbx.py starts it. Writes an FBX header followed by the GLB; a GLB containing b"fail" ends like a script error
+(OMAT3D-FEHLER line, exit 3), one containing b"silent" exits 1 without a word, one containing b"hang" sleeps."""
+import json
+import sys
+import time
+
+args = sys.argv[1:]
+assert args[:5] == ["-b", "--factory-startup", "--python-exit-code", "3", "--python"], args
+assert args[5].endswith("blender_fbx.py"), args
+source, target, kind, report = args[args.index("--") + 1:]
+data = open(source, "rb").read()
+print("Blender 5.2.4 LTS (fake)")
+if b"hang" in data:
+    time.sleep(30)
+if b"silent" in data:
+    sys.exit(1)
+if b"fail" in data:
+    print("OMAT3D-FEHLER GLB ohne Netz")
+    print("Traceback (most recent call last): ...")
+    sys.exit(3)
+open(target, "wb").write(b"Kaydara FBX Binary  \x00" + kind.encode() + b"|" + data)
+json.dump({"target": kind, "bones": 2, "meshes": 1, "clips": [], "fps": 30, "seconds": 0.1, "blender": "fake"},
+          open(report, "w"))
