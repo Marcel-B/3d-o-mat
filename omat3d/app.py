@@ -14,7 +14,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import assist, cutout
+from . import assist, cutout, mcp
 from .animate import AnimationError, add_animations
 from .config import Config
 from .gate import Gate, GateBusy, GateRefused, register_with_gate
@@ -495,6 +495,8 @@ def create_app(config: Config, gate: Gate | None = None, store: Store | None = N
 
     # --- Schnittstelle für andere Programme (Kaderwerk): /v1, siehe models3d.py
     models3d.add_routes(app)
+    # MCP für Agents unter /mcp, über dieselbe Schnittstelle: mcp.py
+    mcp.add_routes(app)
 
     if FRONTEND.is_dir():
         app.mount("/", StaticFiles(directory=FRONTEND, html=True), name="frontend")

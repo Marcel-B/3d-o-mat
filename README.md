@@ -132,6 +132,46 @@ GLB=$(echo "$STATE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["r
 curl -sS -o kopf.glb "$URL/v1/files/$GLB" -H "$AUTH"
 ```
 
+## Für Agents: MCP (`/mcp`)
+
+3d-o-mat ist auch ein MCP-Server, damit Agents wie Claude Code damit arbeiten können: ein Bild hochladen oder malen lassen, prüfen, in 3D umwandeln, auf das Ergebnis warten, ein Skelett einsetzen und das Modell als GLB, 3MF oder STL holen (FBX, sobald 3d-o-mat es kann). Er läuft im selben Container wie die Seite, unter derselben Adresse, und braucht auf dem Rechner des Agents nichts außer dem Eintrag. Wie `/v1` gehört er nur ins Heimnetz und ins Tailnet; angemeldet wird nicht.
+
+**In Claude Code einbinden** (auf einem Rechner im Heimnetz oder im Tailnet):
+
+```sh
+claude mcp add --transport http --scope user 3d-o-mat https://3d.idsrv.info/mcp
+claude mcp list   # 3d-o-mat: https://3d.idsrv.info/mcp (HTTP) - ✓ Connected
+```
+
+`--scope user` macht ihn in allen Projekten verfügbar; ohne gilt er nur im aktuellen Ordner. Für ein einzelnes Projekt, das ihn mit allen teilt, die es auschecken, geht auch eine `.mcp.json` im Repo:
+
+```json
+{ "mcpServers": { "3d-o-mat": { "type": "http", "url": "https://3d.idsrv.info/mcp" } } }
+```
+
+Im Heimnetz geht auch `http://192.168.2.75:8090/mcp`. In Claude Code zeigt `/mcp` die Werkzeuge. Danach reicht etwa: „Mach aus `~/Bilder/roboter.png` ein 3D-Modell mit Skelett und leg das GLB in `assets/`.“ Claude Desktop und andere Clients, die nur stdio können, binden ihn über die Brücke [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) ein (`"command": "npx", "args": ["mcp-remote", "https://3d.idsrv.info/mcp"]`). Cloud-Sitzungen (Claude Code im Web) erreichen 3d-o-mat nicht, weil es nur intern erreichbar ist.
+
+| Werkzeug | Was |
+| --- | --- |
+| `get_status` | Ablage, Schranke, freigegebene Modelle, laufende und wartende Aufträge, ob FBX geht |
+| `list_images`, `show_image` | die Bilder; `show_image` gibt das freigestellte Bild (oder das Original, höchstens 512 px) zum Ansehen zurück |
+| `upload_image` | ein Bild als Base64 hochladen und freistellen |
+| `check_image` | Gemma prüft, ob das Bild für 3D taugt |
+| `write_image_prompts`, `paint_images`, `get_painting` | Prompts von Gemma, Bilder malen mit img-o-mat, warten, bis sie da sind |
+| `create_model` | Auftrag Bild zu 3D, entweder mit `image_id` (wie die Seite: `texture_size`, `faces`, `seed`, `resolution`, `steps`) oder mit `image_sha256` aus `POST /v1/files` (wie Kaderwerk: ein Mesh, Ursprung unten mittig, `height` in Metern) |
+| `get_job` | Stand, Fortschritt und, wenn fertig, die Download-Adressen; `wait_seconds` (bis 240) wartet |
+| `list_jobs`, `cancel_job` | Aufträge, neueste zuerst; einen wartenden herausnehmen |
+| `add_skeleton` | SkinTokens setzt ein Skelett ein (`humanoid` mit Mixamo-Namen, `quadruped`, `custom`), als neuer Auftrag |
+| `export_model` | Download-Adresse für `glb`, `3mf` oder `stl` (für den Slicer, in Ruhehaltung, `height_mm`, `base`) und `fbx` (`target` `unity` oder `unreal`) |
+
+Wie es gebaut ist (`omat3d/mcp.py`):
+- Transport ist Streamable HTTP ohne Sitzung: jede Nachricht ein `POST /mcp`, die Antwort JSON (Protokoll 2024-11-05 bis 2025-11-25). `GET /mcp` gibt 405, denn der Server schickt nichts von sich aus. Eine Anfrage mit fremdem `Origin` (ein Browser auf einer anderen Seite) wird mit 403 abgewiesen.
+- Die Werkzeuge rufen `/api` und `/v1` im selben Prozess auf. Es gelten also dieselben Prüfungen, Fehlermeldungen (teils noch deutsch) und dieselbe Schlange wie für die Seite; was ein Agent anlegt, steht dort in der Liste, Aufträge über `image_sha256` mit dem Absender `mcp`.
+- Dateien gehen nicht durch das Gespräch: Ergebnisse kommen als Adresse mit dem passenden `curl -o`-Befehl. Eine Druckdatei, die nur ein POST liefert, liegt dafür eine Stunde (höchstens die letzten acht) im Speicher unter `/mcp/downloads/<token>/<name>`. Ein Bild von der Platte lädt der Agent am besten selbst hoch, statt es als Base64 zu schicken: `curl -F file=@bild.png https://3d.idsrv.info/api/images` (die `id` der Antwort ist die `image_id`) oder roh an `/v1/files` (gibt den `sha256`).
+- Die Adressen in den Antworten bauen sich aus `Host` und `X-Forwarded-Proto`/`X-Forwarded-Host`; der Proxy vor 3d.idsrv.info muss sie weitergeben, damit `https://` darin steht.
+- FBX bietet `export_model` an, sobald 3d-o-mat die Route `GET /api/jobs/<id>/model.fbx` hat und `/api/status` kein `"fbx": false` meldet (Blender fehlt).
+- Noch nicht über MCP: Animationen aus der Bibliothek und die Proben (sie werden auf der Seite übertragen, `animated.glb` bekommt fertige Keyframes), Haltungen, der Gelenk-Editor, eigene Figuren importieren und Löschen.
+
 ## Einrichten
 
 ### 1. Proxmox: Container und Website
@@ -245,11 +285,12 @@ Im Container holt der Bau des Images die Bewegungsbibliothek (`/app/motions-data
 cd frontend && npm run dev
 ```
 
-`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, Haltung von Gemma, Druckdatei, unzulässige Pfade. `tests/test_models3d.py` spielt die Schnittstelle unter `/v1` mit einem nachgestellten TRELLIS.2 durch: hochladen, Auftrag, Stand, GLB holen und prüfen (ein Mesh, Ursprung am Hals, Texturen, `extras`), Fehler bei falschem SHA-256 und unzulässigen Werten, Abbrechen und Neustart. `tests/test_importer.py` importiert OBJ mit Material und Textur, glTF mit Dateien daneben und als ZIP, GLB mit Mixamo- und fremdem Skelett, und lehnt ab, was keine Figur wird. `tests/test_motions.py` prüft das Holen und Umrechnen der Bibliothek (mit nachgestellten Downloads) und ihre Schnittstelle. `tests/test_printout.py` backt die Haltung eines kleinen GLB mit zwei Knochen ein und prüft auf beiden Wegen, dass die Druckdatei wasserdicht ist. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
+`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, Haltung von Gemma, Druckdatei, unzulässige Pfade. `tests/test_models3d.py` spielt die Schnittstelle unter `/v1` mit einem nachgestellten TRELLIS.2 durch: hochladen, Auftrag, Stand, GLB holen und prüfen (ein Mesh, Ursprung am Hals, Texturen, `extras`), Fehler bei falschem SHA-256 und unzulässigen Werten, Abbrechen und Neustart. `tests/test_mcp.py` spricht MCP mit `/mcp` (initialize, Werkzeuge, Fehler, fremde Origin) und geht den Weg eines Agents: hochladen, ansehen, prüfen, malen, in 3D, warten, Skelett, GLB und 3MF holen, FBX nur mit Route. `tests/test_importer.py` importiert OBJ mit Material und Textur, glTF mit Dateien daneben und als ZIP, GLB mit Mixamo- und fremdem Skelett, und lehnt ab, was keine Figur wird. `tests/test_motions.py` prüft das Holen und Umrechnen der Bibliothek (mit nachgestellten Downloads) und ihre Schnittstelle. `tests/test_printout.py` backt die Haltung eines kleinen GLB mit zwei Knochen ein und prüft auf beiden Wegen, dass die Druckdatei wasserdicht ist. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
 
 ## Später
 
 - Import: FBX (über Blender oder assimp im Container) und eine Zuordnung für Skelette mit anderen Namen (Rigify, Unreal), damit auch die gleich in die Bibliothek können.
 
 - Schnittstelle: den UV-Atlas neu packen (etwa mit xatlas) und die Texturen darauf umbacken, damit das Gesicht eine große zusammenhängende Insel bekommt.
+- MCP: Animationen aus der Bibliothek, dafür müsste das Übertragen (`retarget.ts`) auch auf dem Server laufen.
 - Pixal3D für mehrere Ansichten desselben Objekts (MLX-Serve kann es, `images` statt `image`).
