@@ -31,7 +31,7 @@ export type Options = {
 
 export type Job = {
   id: string;
-  kind?: 'rig' | 'api' | 'import';
+  kind?: 'rig' | 'api' | 'import' | 'prep';
   // Eigene Figuren (omat3d/importer.py): skeleton "mixamo" geht gleich in die Bibliothek, "other" bekommt eins von SkinTokens.
   import?: { format: 'glb' | 'gltf' | 'obj'; triangles: number; skeleton: 'mixamo' | 'other' | null; notes: string[] };
   // Aufträge der Schnittstelle (/v1): wer bestellt hat und unter welchem Namen.

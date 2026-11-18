@@ -5,7 +5,7 @@ Aus einem Bild ein 3D-Modell: Bild hochladen, freistellen lassen, optional von G
 | Teil | Wo | Was |
 | --- | --- | --- |
 | Website und API | Proxmox-LXC mit Docker | Python (FastAPI) mit React-Oberfläche, Port 8090; Freistellen mit rembg und FBX mit Blender auf der CPU; hält keine Daten |
-| Rechnen | oi-o-mat, nur über die [LLM-Schranke](https://github.com/Marcel-B/scripts/blob/main/docs/llm-gate.md) | TRELLIS.2 in MLX-Serve (Bild zu 3D), SkinTokens im Rig-Dienst (Skelett einsetzen), Gemma 4 26B in LM Studio (Prüfen, Prompts), img-o-mat mit FLUX.2 Klein 4B, Z-Image Turbo oder Krea 2 Turbo (Bilder malen) |
+| Rechnen | oi-o-mat, nur über die [LLM-Schranke](https://github.com/Marcel-B/scripts/blob/main/docs/llm-gate.md) | TRELLIS.2 in MLX-Serve (Bild zu 3D), SkinTokens im Rig-Dienst (Skelett einsetzen), Blender im Aufbereitungs-Dienst (Figur aufbereiten), Gemma 4 26B in LM Studio (Prüfen, Prompts), img-o-mat mit FLUX.2 Klein 4B, Z-Image Turbo oder Krea 2 Turbo (Bilder malen) |
 | Dateien | T7 an oi-o-mat, `/Volumes/T7/3d-o-mat`, per SSH | Original, Freistellung, Aufträge, GLB |
 
 ```
@@ -102,6 +102,8 @@ Felder des Auftrags (nur `image` ist Pflicht; unbekannte Felder werden abgewiese
 | `faces` | 30000 | Ziel-Flächenzahl nach dem Vereinfachen, 2000 bis 500000 (geht als `decimation_target` an TRELLIS.2) |
 | `texture` | 2048 | Kantenlänge der Texturen: 512, 1024, 2048 oder 4096 |
 | `remove_background` | true | vorher freistellen wie beim Hochladen auf der Seite (rembg); mit false geht das Bild, wie es ist (hat es Transparenz, zählt die) |
+| `cutout` | Einstellung `cutout` | wie freigestellt wird: `auto`, `rembg`, `flood` (einfarbiger Grund), `head` (rembg und Fläche zusammen, für Köpfe mit nacktem Hals: rembg allein schneidet Hals und Schultern ab, die Fläche allein läuft bei heller Haut durch eine dünne Spur ins Gesicht) oder `none` |
+| `tolerance` | 40 | für `flood` und `head`: wie weit eine Farbe vom Grund abweichen darf (5 bis 120); bei Haut nah am Grau lieber 25 |
 | `seed` | gewürfelt | 0 bis 2147483647; der benutzte steht in der Antwort |
 | `height` | 0.25 | Höhe des Modells in Metern (0,05 bis 3) |
 | `creator`, `label` | Absender, leer | nur zur Anzeige, `label` wird auf der Seite der Name |
@@ -141,6 +143,45 @@ done
 # 4. GLB holen
 GLB=$(echo "$STATE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["file"])')
 curl -sS -o kopf.glb "$URL/v1/files/$GLB" -H "$AUTH"
+```
+
+## Figur aufbereiten (`/v1/figures/preparations`)
+
+Eine TRELLIS-Figur, die in Blender aus zwei Teilen zusammengesetzt wurde (Körper ohne Kopf, Kopf mit langem Hals, Z oben), wird hier für das Rigging fertig gemacht: Innenhaut weg, Öffnungen zu, Kopf als geschlossene Fläche neu aufgebaut und mit geschütztem Gesicht verkleinert, neu abgewickelt, Farbe, Metall/Rauheit und Normal Map gebacken, dann aus 14 Richtungen auf sichtbare Rückseiten geprüft. Das macht `prep/figur_aufbereiten.py` in Blender (bpy 5.3) auf oi-o-mat, im Aufbereitungs-Dienst `prep/server.py` hinter der Schranke (Server `prep`, Typ `tool`, Modell `figur-aufbereiten`); im Container wäre dafür zu wenig Speicher. Der Auftrag läuft in derselben Schlange wie alle anderen.
+
+| Endpunkt | Was |
+| --- | --- |
+| `POST /v1/files` | die `.blend` als rohe Bytes (bis 400 MB) → `{"sha256": "…"}` |
+| `POST /v1/figures/preparations` | Auftrag anlegen → 202 `{"id": "prep_…", "status": "queued", "position": 1}` |
+| `GET /v1/figures/preparations/<id>` | `status`, `passed`, `error`, `result` (Dateien und Kennzahlen, mit dem ganzen Bericht unter `result.report`), `job` (der Auftrag auf der Seite) |
+| `GET /v1/figures/preparations` | `{"data": [...]}`, die letzten 100, neueste zuerst |
+| `DELETE /v1/figures/preparations/<id>` | eine wartende herausnehmen |
+
+Felder (nur `blend` ist Pflicht): `height` (Meter, Vorgabe 1,89; Füße auf dem Boden), `body_triangles` (30000), `head_triangles` (17500), `texture` (2048, je Teil; der Atlas ist doppelt so breit), `head_voxels` (390), `skin_color` `[r, g, b]` 0 bis 1 (bei Helm oder dunkler Haut, sonst wird der Kopf gleichmäßig verkleinert und `kopf_modus` sagt das), `body` und `head` (Objektnamen, sonst gilt das höhere Objekt als Kopf), `retouch` (Quader für dunkle Flecken der Körpertextur, siehe Kopf von `prep/figur_aufbereiten.py`), `check` (false lässt Prüfung und Vorschau weg), `fbx` (true schreibt zusätzlich eine FBX, etwa für Mixamo), `creator`, `label`.
+
+Das Ergebnis liegt unter `/v1/files/<sha256>`, die Schlüssel in `result.files`:
+- `glb`: die kleine Figur als ein Mesh mit einem Material, Atlas aus Körper und Kopf, kein Skelett.
+- `blend`: die Arbeitsdatei mit den Collections `1_Original`, `2_Sauber`, `3_Klein`.
+- `preview`: PNG mit drei Ansichten; `report`: der JSON-Bericht des Skripts.
+- `fbx`: ZIP mit `figur.fbx` und dem Ordner `figur_texturen` (FBX kennt keine kombinierte Metall/Rauheit-Textur).
+
+So wird der Exit-Code ausgewertet:
+- **0:** `done`, `passed` true (oder null mit `check: false`).
+- **2:** Prüfung nicht bestanden (über 200 Pixel Rückseite sichtbar). Der Auftrag steht als `failed` da, `error` nennt die Pixel, aber `result` mit allen Dateien ist zum Ansehen da.
+- **1 mit eigener Meldung:** das Skript lehnt die Eingabe ab (etwa nicht ein oder zwei Mesh-Objekte); `failed`, der Grund steht in `error`. Ein Absturz steht ebenso da, mit der letzten Zeile.
+
+### Spielerfigur in einem Auftrag (`/v1/figures/players`)
+
+Für ein Team mit einem Körper und Köpfen je Spieler (Iron Rush): `POST /v1/figures/players` mit `name` (Ordnername im Spiel, Kleinbuchstaben), `head` (das GLB eines Kopfes mit Hals aus `/v1/models3d/generations`, am besten mit `"cutout": "head"`), `body` (die Eingabe-.blend des Teams mit `Koerper_ohne_Kopf` und `Kopf_langer_Hals` als Vorlage für Größe und Sitz) und `rig` (die gerigte Teamfigur als .blend: Armature mit Mixamo-Namen und Netz). Dazu dieselben Felder wie oben außer `fbx`. Der Dienst setzt den Kopf an die Stelle des alten (`prep/kopf_aufsetzen.py`: Maßstab aus Kinn bis Scheitel, Halsbreite und Schädelbreite, Schultern unterhalb des Kinns weg), bereitet auf und überträgt Skelett und Gewichte der Teamfigur (`prep/rig_uebertragen.py`: nächste Fläche, alles am Kopf, was nicht zum alten Kopf passt, hängt am Head-Knochen). Stand und Ergebnis kommen unter `/v1/figures/preparations/prep_…`, dazu `result.files.fbx` (die Figur mit Skelett, Material `Figur_<name>`) und `result.files.textures` (ZIP mit `<name>-farbe.png`, `<name>-normal.png`). Fällt die Prüfung durch (Exit-Code 2), wird nicht gerigged.
+
+Auf der Seite steht die fertige Figur als „aufbereitet“ in der Liste; „Skelett einsetzen“ geht wie bei jedem Modell. Mit klein-apose-1 (66 MB `.blend`, 452.000 + 161.000 Dreiecke) dauerte ein Lauf auf dem Mac mini knapp 3 Minuten und ergab 46.911 Dreiecke, 11 Pixel Rückseite.
+
+```sh
+SHA=$(curl -sS -X POST "$URL/v1/files" -H "$AUTH" -H 'content-type: application/octet-stream' \
+  --data-binary @figur.blend | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha256"])')
+curl -sS -X POST "$URL/v1/figures/preparations" -H "$AUTH" -H 'content-type: application/json' \
+  -d "{\"blend\": \"$SHA\", \"height\": 1.89, \"fbx\": true, \"label\": \"KLEIN\"}"
+# dann GET /v1/figures/preparations/prep_… bis done oder failed, Dateien aus result.files holen
 ```
 
 ## Für Agents: MCP (`/mcp`)
@@ -255,6 +296,16 @@ Das Skript erledigt:
 
 Gemessen auf oi-o-mat (M6, 32 GB) mit einer TRELLIS-Figur (226.000 Punkte): 34,5 s, höchstens 8,3 GB.
 
+### 4b. oi-o-mat: Aufbereitungs-Dienst (Figur aufbereiten)
+
+Python 3.13 muss da sein (`brew install python@3.13`), weil es bpy 5.3 nur dafür gibt. Dann im Checkout:
+
+```sh
+./install-prep.sh
+```
+
+Das Skript legt unter `/Volumes/T7/figur-aufbereiten/venv` ein Python mit bpy 5.3, numpy, scipy und scikit-image an (etwa 1 GB), kopiert die Skripte aus `prep/` nach `~/Library/Application Support/3d-o-mat`, schreibt `prep.json` und trägt den Dienst bei der Schranke als Server `prep` vom Typ `tool` ein (Port 11241, `MEMORY=10` GB angemeldet). Danach in `/gate` bei 3d-o-mat das Modell `figur-aufbereiten` freigeben. Log: `~/Library/Logs/3d-o-mat-prep.log`.
+
 ### 5. Freigeben
 
 Beim ersten Start meldet sich die App bei der Schranke an. In `http://192.168.2.122:1235/gate` dann bei **3d-o-mat** TRELLIS.2, SkinTokens und die Bildmodelle (`klein-4b`, `z-image-turbo`, `krea-2-turbo`) freigeben, Gemma ebenfalls freigeben oder installieren. Danach ist die Website unter `http://<container>:8090` erreichbar. Beim Start lädt die App das rembg-Modell (etwa 170 MB) einmal in das Volume `rembg-cache`.
@@ -282,7 +333,7 @@ Im Container holt der Bau des Images die Bewegungsbibliothek (`/app/motions-data
 | --- | --- |
 | `store` | `{"ssh": "marcel@192.168.2.122", "key": "/ssh/id_ed25519", "knownHosts": "/ssh/known_hosts"}` für die T7 von oi-o-mat, oder `{"folder": "…"}` für einen eigenen Ordner |
 | `gate` | Anmeldung bei der Schranke: `url`, `app`, `note`, `priority`, `holdFor`, `models` (siehe docs/llm-gate.md im scripts-Repo) |
-| `trellisModel`, `rigModel`, `assistModel` | welche der angemeldeten Modelle für 3D, fürs Skelett und für Gemma |
+| `trellisModel`, `rigModel`, `assistModel`, `prepModel` | welche der angemeldeten Modelle für 3D, fürs Skelett, für Gemma und fürs Aufbereiten einer Figur (`figur-aufbereiten`) |
 | `paintModels` | die Bildmodelle von img-o-mat zur Auswahl, das erste ist die Vorgabe (`klein-4b`, `z-image-turbo`, `krea-2-turbo`). Fehlt eines dieser Modelle in `gate.models`, meldet die App es trotzdem an; so reicht bei einer älteren `config.json` ein Update |
 | `defaults` | Vorgaben für `/v1/3d/generations`: `texture_size`, `decimation_target`, auch `resolution`, `steps` |
 | `cutout` | `auto`, `rembg`, `flood` oder `none` |
@@ -299,7 +350,7 @@ Im Container holt der Bau des Images die Bewegungsbibliothek (`/app/motions-data
 cd frontend && npm run dev
 ```
 
-`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, Haltung von Gemma, Druckdatei, unzulässige Pfade. `tests/test_models3d.py` spielt die Schnittstelle unter `/v1` mit einem nachgestellten TRELLIS.2 durch: hochladen, Auftrag, Stand, GLB holen und prüfen (ein Mesh, Ursprung am Hals, Texturen, `extras`), Fehler bei falschem SHA-256 und unzulässigen Werten, Abbrechen und Neustart. `tests/test_importer.py` importiert OBJ mit Material und Textur, glTF mit Dateien daneben und als ZIP, GLB mit Mixamo- und fremdem Skelett, und lehnt ab, was keine Figur wird. `tests/test_motions.py` prüft das Holen und Umrechnen der Bibliothek (mit nachgestellten Downloads) und ihre Schnittstelle. `tests/test_printout.py` backt die Haltung eines kleinen GLB mit zwei Knochen ein und prüft auf beiden Wegen, dass die Druckdatei wasserdicht ist. `tests/test_fbx.py` prüft den Aufruf von Blender mit `tests/fake/blender` und die Wege unter `/api`; ist ein echtes Blender da (`OMAT3D_TEST_BLENDER=/pfad/zu/blender` oder `blender` im `PATH`), wandelt es eine kleine Figur mit einer Animation um, liest das FBX mit Blender wieder und prüft Knochen, Gewichte, Take, Länge und Größe. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
+`npm run dev` läuft auf Port 5173 und leitet `/api` an Port 8090 weiter. Die Tests spielen den ganzen Weg ohne oi-o-mat durch: Hochladen, Freistellen, Auftrag, Stream mit Abbruch und 503, Ablehnung, fehlende T7, Gemma, Malen samt Inhaltsfilter, Haltung von Gemma, Druckdatei, unzulässige Pfade. `tests/test_models3d.py` spielt die Schnittstelle unter `/v1` mit einem nachgestellten TRELLIS.2 durch: hochladen, Auftrag, Stand, GLB holen und prüfen (ein Mesh, Ursprung am Hals, Texturen, `extras`), Fehler bei falschem SHA-256 und unzulässigen Werten, Abbrechen und Neustart. `tests/test_importer.py` importiert OBJ mit Material und Textur, glTF mit Dateien daneben und als ZIP, GLB mit Mixamo- und fremdem Skelett, und lehnt ab, was keine Figur wird. `tests/test_motions.py` prüft das Holen und Umrechnen der Bibliothek (mit nachgestellten Downloads) und ihre Schnittstelle. `tests/test_printout.py` backt die Haltung eines kleinen GLB mit zwei Knochen ein und prüft auf beiden Wegen, dass die Druckdatei wasserdicht ist. `tests/test_figures.py` spielt die Aufbereitung mit einem nachgestellten `figur_aufbereiten.py` durch, den Dienst als eigenen Prozess und hinter `/v1/figures/preparations`: Dateien, Bericht, Exit-Code 2 und 1, Absturz, unzulässige Werte, Abbrechen. `tests/test_fbx.py` prüft den Aufruf von Blender mit `tests/fake/blender` und die Wege unter `/api`; ist ein echtes Blender da (`OMAT3D_TEST_BLENDER=/pfad/zu/blender` oder `blender` im `PATH`), wandelt es eine kleine Figur mit einer Animation um, liest das FBX mit Blender wieder und prüft Knochen, Gewichte, Take, Länge und Größe. Die Schranke ist dabei ein `httpx.MockTransport`. Die Ablage läuft einmal direkt und einmal über `tests/fake/ssh`, das wie der erzwungene Befehl von sshd arbeitet.
 
 ## Später
 

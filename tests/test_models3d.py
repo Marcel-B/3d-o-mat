@@ -207,6 +207,9 @@ def test_without_seed_the_server_picks_one(make):
     ({"texture": True}, 400, "texture"),
     ({"seed": -1}, 400, "seed"),
     ({"remove_background": "ja"}, 400, "remove_background"),
+    ({"cutout": "magisch"}, 400, "cutout"),
+    ({"cutout": "flood", "remove_background": False}, 400, "widersprechen"),
+    ({"tolerance": 2}, 400, "tolerance"),
     ({"label": 7}, 400, "label"),
     ({"steps": 3}, 400, "Unbekannte Felder"),
 ])
@@ -306,3 +309,36 @@ def test_export_refuses_two_materials():
     body = struct.pack("<II", len(text), 0x4E4F534A) + text + struct.pack("<II", len(binary), 0x004E4942) + binary
     with pytest.raises(ExportError, match="Materialien"):
         finish(struct.pack("<4sII", b"glTF", 2, 12 + len(body)) + body, 128, 0.25, {})
+
+
+def test_cutout_can_be_chosen(make):
+    """cutout und tolerance gehen an das Freistellen: flood mit kleiner Toleranz, head fällt ohne rembg auf flood."""
+    client, _ = make()
+    with client:
+        for body, method in (({"cutout": "flood", "tolerance": 25}, "flood"), ({"cutout": "head"}, "flood")):
+            created = client.post("/v1/models3d/generations", json={"image": upload(client), **body}).json()
+            job = until(client, created["id"])
+            assert job["status"] == "done", job
+            page = next(j for j in client.get("/api/jobs").json() if j["id"] == created["id"].removeprefix("job_"))
+            image = next(i for i in client.get("/api/images").json() if i["id"] == page["imageId"])
+            assert image["cutout"]["method"] == method
+
+
+def test_head_cutout_keeps_what_either_mask_keeps(monkeypatch):
+    """head legt rembg und Fläche zusammen: rembg hat den Hals verloren, die Fläche eine Spur durchs Gesicht."""
+    from omat3d import cutout
+    grey = np.full((40, 40, 3), 128, np.uint8)
+    grey[5:35, 10:30] = (200, 150, 120)        # Kopf und Hals
+    grey[5:20, 19] = (128, 128, 128)           # graue Spur im Gesicht: die Fläche läuft hinein
+    image = Image.fromarray(grey)
+
+    def fake_rembg(img, model):
+        out = np.zeros((40, 40, 4), np.uint8)
+        out[5:22, 10:30] = (200, 150, 120, 255)  # nur der Kopf, ohne Hals
+        return Image.fromarray(out, "RGBA")
+    monkeypatch.setattr(cutout, "rembg_available", lambda: True)
+    monkeypatch.setattr(cutout, "with_rembg", fake_rembg)
+    alpha = np.asarray(cutout.head(image, "x", 40))[..., 3]
+    assert alpha[10, 19] == 255          # die Spur im Gesicht ist zu (aus rembg)
+    assert alpha[30, 20] == 255          # der Hals bleibt (aus der Fläche)
+    assert alpha[2, 2] == 0              # Hintergrund bleibt weg

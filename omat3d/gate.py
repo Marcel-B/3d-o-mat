@@ -138,6 +138,40 @@ class Gate:
             raise RuntimeError("Der Rig-Dienst lieferte kein GLB")
         return base64.b64decode(payload["data"]), payload.get("report") or {}
 
+    def prepare_figure(self, model: str, blend: bytes, options: dict) -> dict:
+        """POST /v1/prepare (Aufbereitungs-Dienst auf oi-o-mat, prep/server.py): zurück kommen exitCode, passed,
+        report und files (blend, glb, preview, fbx als Bytes). Lehnt das Skript die Eingabe ab (422), steht sein Grund
+        im RuntimeError."""
+        body = {"model": model, "blend": base64.b64encode(blend).decode(), "options": options}
+        try:
+            with self._client() as client:
+                response = client.post("/v1/prepare", json=body)
+        except httpx.TransportError as error:
+            raise StreamBroken(f"Verbindung abgerissen: {error}") from error
+        _check(response)
+        payload = response.json()
+        files = {key: base64.b64decode(value) for key, value in (payload.get("files") or {}).items() if value}
+        if "glb" not in files:
+            raise RuntimeError("Der Aufbereitungs-Dienst lieferte kein GLB")
+        return {**payload, "files": files}
+
+    def player_figure(self, model: str, head: bytes, body: bytes, rig: bytes, name: str, options: dict) -> dict:
+        """POST /v1/player (Aufbereitungs-Dienst): Kopf aufsetzen, aufbereiten, Rig übertragen. Antwort wie
+        prepare_figure, dazu files.fbx (die Figur mit Skelett) und files.textures (ZIP mit Farbe und Normal Map)."""
+        payload = {"model": model, "name": name, "options": options,
+                   **{key: base64.b64encode(data).decode() for key, data in (("head", head), ("body", body), ("rig", rig))}}
+        try:
+            with self._client() as client:
+                response = client.post("/v1/player", json=payload)
+        except httpx.TransportError as error:
+            raise StreamBroken(f"Verbindung abgerissen: {error}") from error
+        _check(response)
+        answer = response.json()
+        files = {key: base64.b64decode(value) for key, value in (answer.get("files") or {}).items() if value}
+        if "glb" not in files:
+            raise RuntimeError("Der Aufbereitungs-Dienst lieferte kein GLB")
+        return {**answer, "files": files}
+
     def paint(self, model: str, prompt: str, size: str = "1024x1024", seed: int | None = None, n: int = 1,
               on_progress=None, on_image=None) -> int:
         """POST /v1/images/generations mit stream (img-o-mat hinter der Schranke): Fortschritt an

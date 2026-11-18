@@ -1,7 +1,8 @@
 """Die Schnittstelle für andere Programme: aus einem Bild ein GLB, erster Nutzer Kaderwerk (ein Kopf je Spieler).
 Gebaut wie img-o-mat, damit derselbe Client passt:
 
-    POST   /v1/files                        rohe Bytes (PNG, JPEG, WebP) -> {"sha256"}; 201 neu, 200 schon da
+    POST   /v1/files                        rohe Bytes (PNG, JPEG, WebP; .blend und GLB für figures.py) -> {"sha256"}; 201 neu,
+                                            200 schon da
     GET    /v1/files/<sha256>               die Datei (Bilder mit ihrem Typ, GLB als model/gltf-binary)
     POST   /v1/models3d/generations         Auftrag anlegen, kehrt sofort zurück (202)
     GET    /v1/models3d/generations         die letzten 100 Aufträge der Schnittstelle, neueste zuerst
@@ -28,6 +29,8 @@ from .store import NotMounted, StoreError, valid_id
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MAX_FILE = 40 * 1024 * 1024
+# Eine .blend von TRELLIS mit Körper und Kopf hat schnell 120 MB; zur Aufbereitung (figures.py).
+MAX_BLEND = 400 * 1024 * 1024
 TEXTURES = (512, 1024, 2048, 4096)
 FACES = (2000, 500_000)
 HEIGHTS = (0.05, 3.0)
@@ -60,7 +63,16 @@ def sniff(data: bytes) -> str | None:
         return "image/webp"
     if data[:4] == b"glTF":
         return "model/gltf-binary"
+    # Blender schreibt "BLENDER" an den Anfang, komprimiert (ab Blender 3.0) einen zstd-Rahmen.
+    if data[:7] == b"BLENDER" or data[:4] == b"\x28\xb5\x2f\xfd":
+        return "application/x-blender"
     return None
+
+
+def caller(request: Request) -> str | None:
+    """Der Absender aus `Authorization: Bearer <App>`; angemeldet wird nicht."""
+    header = request.headers.get("authorization", "")
+    return header[7:].strip()[:64] or None if header.lower().startswith("bearer ") else None
 
 
 def error(status: int, message: str) -> JSONResponse:
@@ -109,10 +121,13 @@ class Models3d:
         data = self.store.get("files", job["file"], "data")
         info = self.file_info(job["file"]) or {}
         suffix = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}.get(info.get("type"), "bin")
-        method = self.config.cutout if job["api"]["removeBackground"] else "none"
+        method = job["api"].get("cutout") or self.config.cutout
+        if not job["api"]["removeBackground"]:
+            method = "none"
         name = job["api"].get("label") or "Kopf"
         image = self.save_image(data, name[:80], {"original": f"original.{suffix}", "sha256": job["file"],
-                                                  "app": job["api"].get("app")}, method)
+                                                  "app": job["api"].get("app")}, method,
+                                job["api"].get("tolerance") or 40)
         self.jobs.update(job_id, imageId=image["id"], imageName=name)
         return self.store.get("images", image["id"], "cutout.png")
 
@@ -184,7 +199,7 @@ class Models3d:
         if not isinstance(body, dict):
             raise ApiError(400, "Der Body muss ein JSON-Objekt sein")
         unknown = sorted(set(body) - {"image", "faces", "texture", "remove_background", "seed", "creator", "label",
-                                      "height"})
+                                      "height", "cutout", "tolerance"})
         if unknown:
             raise ApiError(400, f"Unbekannte Felder: {', '.join(unknown)}")
         image = body.get("image")
@@ -210,6 +225,12 @@ class Models3d:
         remove = body.get("remove_background", True)
         if not isinstance(remove, bool):
             raise ApiError(400, "remove_background: true oder false")
+        method = body.get("cutout")
+        if method is not None and method not in cutout.METHODS:
+            raise ApiError(400, f"cutout: {', '.join(cutout.METHODS)}")
+        if method not in (None, "none") and not remove:
+            raise ApiError(400, "cutout und remove_background: false widersprechen sich")
+        tolerance = number("tolerance", 40, 5, 120)
         texts = {}
         for name in ("creator", "label"):
             value = body.get(name)
@@ -220,28 +241,25 @@ class Models3d:
         return {"file": image,
                 "options": {"texture_size": int(texture), "decimation_target": faces, "seed": seed},
                 "api": {"app": app, "creator": texts["creator"] or app, "label": texts["label"],
-                        "removeBackground": remove, "height": height}}
+                        "removeBackground": remove, "height": height, "cutout": method, "tolerance": tolerance}}
 
     # --- Endpunkte
 
     def add_routes(self, app: FastAPI) -> None:
-        def caller(request: Request) -> str | None:
-            header = request.headers.get("authorization", "")
-            return header[7:].strip()[:64] or None if header.lower().startswith("bearer ") else None
-
         @app.post("/v1/files")
         async def upload(request: Request):
             declared = request.headers.get("content-length")
-            if declared and declared.isdigit() and int(declared) > MAX_FILE:
-                raise ApiError(413, "Datei größer als 40 MB")
+            if declared and declared.isdigit() and int(declared) > MAX_BLEND:
+                raise ApiError(413, "Datei größer als 400 MB")
             data = await request.body()
             if not data:
                 raise ApiError(400, "Leerer Body; die Datei geht als rohe Bytes (application/octet-stream)")
-            if len(data) > MAX_FILE:
-                raise ApiError(413, "Datei größer als 40 MB")
             media_type = sniff(data)
-            if media_type not in ("image/png", "image/jpeg", "image/webp"):
-                raise ApiError(415, "Nur PNG, JPEG oder WebP")
+            if media_type not in ("image/png", "image/jpeg", "image/webp", "application/x-blender", "model/gltf-binary"):
+                raise ApiError(415, "Nur PNG, JPEG, WebP, .blend oder GLB")
+            model = media_type in ("application/x-blender", "model/gltf-binary")
+            if len(data) > (MAX_BLEND if model else MAX_FILE):
+                raise ApiError(413, "Datei größer als 400 MB" if model else "Bild größer als 40 MB")
             self.store.ensure_mounted()
             digest, created = self.put_file(data, media_type, caller(request))
             return JSONResponse({"sha256": digest}, status_code=201 if created else 200)
